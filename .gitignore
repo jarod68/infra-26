@@ -1,0 +1,7 @@
+# Local deployment config (domains are fine to commit, but .env may hold VAPID
+# keys and is environment-specific). Commit .env.example, not .env.
+.env
+
+# Any rendered/temporary manifests
+*.rendered
+/tmp/

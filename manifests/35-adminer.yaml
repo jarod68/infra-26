@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adminer
+  namespace: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: adminer }
+  template:
+    metadata:
+      labels: { app: adminer }
+    spec:
+      containers:
+        - name: adminer
+          image: adminer:latest
+          env:
+            - { name: ADMINER_DEFAULT_SERVER, value: postgres }
+          ports:
+            - containerPort: 8080
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: adminer
+  namespace: web
+spec:
+  selector: { app: adminer }
+  ports:
+    - port: 8080
+      targetPort: 8080

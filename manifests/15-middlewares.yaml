@@ -1,0 +1,12 @@
+# HSTS response header, applied to every route (Traefik v3 CRD).
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: hsts
+  namespace: web
+spec:
+  headers:
+    stsSeconds: 31536000
+    stsIncludeSubdomains: true
+    stsPreload: true
+    forceSTSHeader: true

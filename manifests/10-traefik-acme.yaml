@@ -1,0 +1,30 @@
+# Extends k3s' bundled Traefik (deployed by its helm-controller) with a Let's
+# Encrypt certificate resolver and a global HTTP→HTTPS redirect — the same model
+# the old docker-compose Traefik used (HTTP-01 challenge on :80), now declarative.
+# The helm-controller merges this into the chart values and reconciles Traefik.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    # Persist the ACME store so certs survive Traefik restarts (local-path PVC).
+    # Traefik creates /data/acme.json (0600) itself; fsGroup makes /data writable.
+    persistence:
+      enabled: true
+      accessMode: ReadWriteOnce
+      size: 128Mi
+      path: /data
+    certificatesResolvers:
+      letsencrypt:
+        acme:
+          email: ${ACME_EMAIL}
+          storage: /data/acme.json
+          httpChallenge:
+            entryPoint: web
+    # Redirect every :80 request to :443 (ACME challenges are still served first).
+    ports:
+      web:
+        redirectTo:
+          port: websecure

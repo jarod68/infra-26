@@ -1,0 +1,91 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: photo-book-photos, namespace: web }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 10Gi } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: photo-book-previews, namespace: web }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 5Gi } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: photo-book-medium, namespace: web }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 5Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: photo-book
+  namespace: web
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # RWO volumes — one writer at a time
+  selector:
+    matchLabels: { app: photo-book }
+  template:
+    metadata:
+      labels: { app: photo-book }
+    spec:
+      # Image runs as the unprivileged `node` user (uid 1000); fsGroup makes the
+      # PVC mounts group-writable so it can write photos/previews/medium.
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: photo-book
+          image: ${PHOTO_IMAGE}
+          imagePullPolicy: Always
+          env:
+            - { name: NODE_ENV, value: production }
+            - { name: PORT, value: "3000" }
+            - { name: POSTGRES_HOST, value: postgres }
+            - { name: PHOTOS_DIR, value: /app/photos }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: app-secrets, key: POSTGRES_PASSWORD }
+            # Web Push — optional; absent keys simply leave push disabled.
+            - name: VAPID_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef: { name: app-secrets, key: VAPID_PUBLIC_KEY, optional: true }
+            - name: VAPID_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef: { name: app-secrets, key: VAPID_PRIVATE_KEY, optional: true }
+            - name: VAPID_SUBJECT
+              valueFrom:
+                secretKeyRef: { name: app-secrets, key: VAPID_SUBJECT, optional: true }
+          ports:
+            - containerPort: 3000
+          volumeMounts:
+            - { name: photos, mountPath: /app/photos }
+            - { name: previews, mountPath: /app/public/previews }
+            - { name: medium, mountPath: /app/public/medium }
+          readinessProbe:
+            tcpSocket: { port: 3000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+      volumes:
+        - { name: photos, persistentVolumeClaim: { claimName: photo-book-photos } }
+        - { name: previews, persistentVolumeClaim: { claimName: photo-book-previews } }
+        - { name: medium, persistentVolumeClaim: { claimName: photo-book-medium } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: photo-book
+  namespace: web
+spec:
+  selector: { app: photo-book }
+  ports:
+    - port: 3000
+      targetPort: 3000

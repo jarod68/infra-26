@@ -12,7 +12,7 @@ help:
 	@echo "  update        Pull :latest images and rolling-restart the apps."
 	@echo "  restart       Restart every workload."
 	@echo "  status        Show pods, services, ingressroutes and volumes."
-	@echo "  password      Print the generated Postgres password."
+	@echo "  password      Print the generated Postgres + Portainer passwords."
 	@echo "  logs-photo|logs-mine|logs-db|logs-traefik   Tail logs."
 
 bootstrap:
@@ -35,7 +35,8 @@ status:
 	@$(KUBECTL) -n web get pvc
 
 password:
-	@$(KUBECTL) -n web get secret app-secrets -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d; echo
+	@printf 'Postgres           : '; $(KUBECTL) -n web get secret app-secrets        -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d; echo
+	@printf 'Portainer (admin)  : '; $(KUBECTL) -n web get secret portainer-basic-auth-plain -o jsonpath='{.data.plaintext}'  | base64 -d; echo
 
 logs-photo:
 	$(KUBECTL) -n web logs -f deploy/photo-book

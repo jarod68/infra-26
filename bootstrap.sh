@@ -30,7 +30,26 @@ else
   info "Installing k3s (single-node) …"
   # Defaults give us Traefik (ingress), local-path (storage) and servicelb
   # (binds :80/:443 on the host) — exactly what we need for one node.
-  curl -sfL https://get.k3s.io | sh -
+  #
+  # Dual-stack (IPv4 + IPv6) so Let's Encrypt can satisfy HTTP-01 over the AAAA
+  # record and services answer on both families. The cluster/service CIDRs and
+  # node IPs must be set at INSTALL time — they cannot be changed on an existing
+  # cluster (a re-install via k3s-uninstall.sh is required to switch).
+  K3S_ARGS=(server)
+  NODE_V4="$(ip -4 route get 1.1.1.1 2>/dev/null            | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1);exit}}')"
+  NODE_V6="$(ip -6 route get 2606:4700:4700::1111 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1);exit}}')"
+  if [[ -n "$NODE_V6" ]]; then
+    info "IPv6 detected (${NODE_V6}) — installing k3s in dual-stack mode."
+    K3S_ARGS+=(
+      --cluster-cidr=10.42.0.0/16,fd00:42::/56
+      --service-cidr=10.43.0.0/16,fd00:43::/112
+      --flannel-ipv6-masq
+      --node-ip="${NODE_V4:+$NODE_V4,}$NODE_V6"
+    )
+  else
+    info "No IPv6 on the default route — installing k3s IPv4-only."
+  fi
+  curl -sfL https://get.k3s.io | sh -s - "${K3S_ARGS[@]}"
   ok "k3s installed."
 fi
 

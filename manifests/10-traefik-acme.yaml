@@ -9,6 +9,14 @@ metadata:
   namespace: kube-system
 spec:
   valuesContent: |-
+    # Expose the LoadBalancer service on both IP families so servicelb binds
+    # :80/:443 on IPv4 *and* IPv6 — required for Let's Encrypt HTTP-01 over the
+    # AAAA record. (Needs the cluster installed dual-stack; see bootstrap.sh.)
+    service:
+      ipFamilyPolicy: PreferDualStack
+      ipFamilies:
+        - IPv4
+        - IPv6
     # Persist the ACME store so certs survive Traefik restarts (local-path PVC).
     # Traefik creates /data/acme.json (0600) itself; fsGroup makes /data writable.
     persistence:

@@ -19,12 +19,13 @@ set -a; . ./.env; set +a
 
 : "${DOMAIN:?DOMAIN missing in .env}"
 : "${PLAY_DOMAIN:?PLAY_DOMAIN missing in .env}"
+: "${PORTAINER_DOMAIN:?PORTAINER_DOMAIN missing in .env}"
 : "${ACME_EMAIL:?ACME_EMAIL missing in .env}"
 : "${PHOTO_IMAGE:?PHOTO_IMAGE missing in .env}"
 : "${MINESIM_IMAGE:?MINESIM_IMAGE missing in .env}"
 # One mine-sim worker per CPU core unless pinned in .env (1 ⇒ single process).
 : "${MINESIM_WORKERS:=$(nproc 2>/dev/null || echo 1)}"
-export DOMAIN PLAY_DOMAIN ACME_EMAIL PHOTO_IMAGE MINESIM_IMAGE MINESIM_WORKERS
+export DOMAIN PLAY_DOMAIN PORTAINER_DOMAIN ACME_EMAIL PHOTO_IMAGE MINESIM_IMAGE MINESIM_WORKERS
 
 # ── kubectl (prefer a real kubectl, fall back to `k3s kubectl`) ───────────────
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
@@ -60,6 +61,30 @@ ensure_secret() {
 ensure_secret
 ok "Secret app-secrets ready."
 
+# ── Portainer basic-auth (Traefik) ────────────────────────────────────────────
+# Strong random password, generated once and reused on redeploy. Stored in TWO
+# secrets, because Traefik's basicAuth secret must contain EXACTLY ONE key:
+#   portainer-basic-auth       — key `users`: apr1 hash in htpasswd form (Traefik)
+#   portainer-basic-auth-plain — key `plaintext`: clear password (`make password`)
+ensure_basic_auth() {
+  if $KUBECTL -n web get secret portainer-basic-auth-plain >/dev/null 2>&1; then
+    info "Reusing existing Portainer basic-auth password."
+    return
+  fi
+  local pw hash
+  pw="$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 32)"
+  hash="$(openssl passwd -apr1 "$pw")"
+  $KUBECTL -n web create secret generic portainer-basic-auth \
+    --from-literal=users="admin:${hash}" \
+    --dry-run=client -o yaml | $KUBECTL apply -f -
+  $KUBECTL -n web create secret generic portainer-basic-auth-plain \
+    --from-literal=plaintext="$pw" \
+    --dry-run=client -o yaml | $KUBECTL apply -f -
+  info "Generated a new Portainer basic-auth password (see: make password)."
+}
+ensure_basic_auth
+ok "Secrets portainer-basic-auth{,-plain} ready."
+
 # ── Traefik: Let's Encrypt resolver + HTTP→HTTPS redirect ────────────────────
 info "Configuring Traefik (Let's Encrypt resolver) …"
 envsubst '$ACME_EMAIL' < manifests/10-traefik-acme.yaml | $KUBECTL apply -f -
@@ -69,8 +94,11 @@ envsubst '$ACME_EMAIL' < manifests/10-traefik-acme.yaml | $KUBECTL apply -f -
 # first — `kubectl wait` errors immediately on a missing resource.)
 info "Waiting for Traefik CRDs …"
 for crd in ingressroutes.traefik.io middlewares.traefik.io; do
+  # Wait until the CRD exists AND its .status.conditions is populated. A freshly
+  # created CRD has a nil status for a moment, and `kubectl wait` errors out
+  # ("<nil> is of the type <nil>") instead of waiting when that field is absent.
   for _ in $(seq 1 60); do
-    $KUBECTL get crd "$crd" >/dev/null 2>&1 && break
+    $KUBECTL get crd "$crd" -o jsonpath='{.status.conditions}' 2>/dev/null | grep -q . && break
     sleep 3
   done
   $KUBECTL wait --for=condition=established "crd/$crd" --timeout=120s \
@@ -78,14 +106,15 @@ for crd in ingressroutes.traefik.io middlewares.traefik.io; do
 done
 
 # ── Render + apply the rest (substituting only our known vars) ────────────────
-VARS='$DOMAIN $PLAY_DOMAIN $ACME_EMAIL $PHOTO_IMAGE $MINESIM_IMAGE $MINESIM_WORKERS'
+VARS='$DOMAIN $PLAY_DOMAIN $PORTAINER_DOMAIN $ACME_EMAIL $PHOTO_IMAGE $MINESIM_IMAGE $MINESIM_WORKERS'
 RENDER="$(mktemp -d)"; trap 'rm -rf "$RENDER"' EXIT
 for f in manifests/15-middlewares.yaml \
          manifests/30-postgres.yaml \
          manifests/35-adminer.yaml \
          manifests/40-photo-book.yaml \
          manifests/50-mine-sim.yaml \
-         manifests/60-ingressroutes.yaml; do
+         manifests/60-ingressroutes.yaml \
+         manifests/70-portainer.yaml; do
   envsubst "$VARS" < "$f" > "$RENDER/$(basename "$f")"
 done
 info "Applying application manifests …"
@@ -97,5 +126,6 @@ echo
 echo -e "  photo-book : ${GREEN}https://${DOMAIN}${RESET}"
 echo -e "  adminer    : ${GREEN}https://${DOMAIN}/db${RESET}"
 echo -e "  mine-sim   : ${GREEN}https://${PLAY_DOMAIN}${RESET}"
+echo -e "  portainer  : ${GREEN}https://${PORTAINER_DOMAIN}${RESET}"
 echo
 warn "DNS for ${DOMAIN} and ${PLAY_DOMAIN} must point to this VPS. TLS is issued on first HTTPS hit (~30 s)."

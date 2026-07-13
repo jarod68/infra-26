@@ -2,8 +2,8 @@
 export KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
 KUBECTL := $(shell command -v kubectl >/dev/null 2>&1 && echo kubectl || echo k3s kubectl)
 
-.PHONY: help bootstrap deploy update restart status password \
-        logs-photo logs-mine logs-traefik logs-db
+.PHONY: help bootstrap deploy update restart status status-mon password \
+        logs-photo logs-mine logs-traefik logs-db logs-grafana logs-loki
 
 help:
 	@echo "Targets:"
@@ -11,9 +11,10 @@ help:
 	@echo "  deploy        Render manifests from .env and apply them."
 	@echo "  update        Pull :latest images and rolling-restart the apps."
 	@echo "  restart       Restart every workload."
-	@echo "  status        Show pods, services, ingressroutes and volumes."
-	@echo "  password      Print the generated Postgres + Portainer passwords."
-	@echo "  logs-photo|logs-mine|logs-db|logs-traefik   Tail logs."
+	@echo "  status        Show pods, services, ingressroutes and volumes (web)."
+	@echo "  status-mon    Show the monitoring stack (pods, svc, pvc)."
+	@echo "  password      Print the generated Postgres / admin / Grafana passwords."
+	@echo "  logs-photo|logs-mine|logs-db|logs-traefik|logs-grafana|logs-loki  Tail logs."
 
 bootstrap:
 	sudo ./bootstrap.sh
@@ -34,9 +35,15 @@ status:
 	@echo
 	@$(KUBECTL) -n web get pvc
 
+status-mon:
+	@$(KUBECTL) -n monitoring get pods,svc
+	@echo
+	@$(KUBECTL) -n monitoring get pvc
+
 password:
-	@printf 'Postgres           : '; $(KUBECTL) -n web get secret app-secrets        -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d; echo
-	@printf 'Portainer (admin)  : '; $(KUBECTL) -n web get secret portainer-basic-auth-plain -o jsonpath='{.data.plaintext}'  | base64 -d; echo
+	@printf 'Postgres            : '; $(KUBECTL) -n web        get secret app-secrets             -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d; echo
+	@printf 'admin basic-auth    : '; $(KUBECTL) -n web        get secret admin-basic-auth-plain  -o jsonpath='{.data.plaintext}'        | base64 -d; echo
+	@printf 'Grafana (admin)     : '; $(KUBECTL) -n monitoring get secret grafana-admin           -o jsonpath='{.data.admin-password}'   | base64 -d; echo
 
 logs-photo:
 	$(KUBECTL) -n web logs -f deploy/photo-book
@@ -46,3 +53,7 @@ logs-db:
 	$(KUBECTL) -n web logs -f deploy/postgres
 logs-traefik:
 	$(KUBECTL) -n kube-system logs -f deploy/traefik
+logs-grafana:
+	$(KUBECTL) -n monitoring logs -f deploy/grafana
+logs-loki:
+	$(KUBECTL) -n monitoring logs -f statefulset/loki

@@ -9,6 +9,12 @@ metadata:
   namespace: kube-system
 spec:
   valuesContent: |-
+    # Allow an IngressRoute in one namespace to reference a Service/Middleware in
+    # another — the admin IngressRoute (ns web) routes /grafana to the Grafana
+    # Service in ns monitoring.
+    providers:
+      kubernetesCRD:
+        allowCrossNamespace: true
     # Expose the LoadBalancer service on both IP families so servicelb binds
     # :80/:443 on IPv4 *and* IPv6 — required for Let's Encrypt HTTP-01 over the
     # AAAA record. (Needs the cluster installed dual-stack; see bootstrap.sh.)
@@ -36,3 +42,13 @@ spec:
       web:
         redirectTo:
           port: websecure
+    # Access logs in JSON on stdout → captured by Promtail into Loki. This is our
+    # request-tracing layer: every request in/out through the proxy is recorded
+    # (method, host, path, status, duration, backend). Query in Grafana with:
+    #   {namespace="kube-system", pod=~"traefik.*"} | json
+    logs:
+      general:
+        level: INFO
+      access:
+        enabled: true
+        format: json

@@ -19,13 +19,13 @@ set -a; . ./.env; set +a
 
 : "${DOMAIN:?DOMAIN missing in .env}"
 : "${PLAY_DOMAIN:?PLAY_DOMAIN missing in .env}"
-: "${PORTAINER_DOMAIN:?PORTAINER_DOMAIN missing in .env}"
+: "${ADMIN_DOMAIN:?ADMIN_DOMAIN missing in .env}"
 : "${ACME_EMAIL:?ACME_EMAIL missing in .env}"
 : "${PHOTO_IMAGE:?PHOTO_IMAGE missing in .env}"
 : "${MINESIM_IMAGE:?MINESIM_IMAGE missing in .env}"
 # One mine-sim worker per CPU core unless pinned in .env (1 ⇒ single process).
 : "${MINESIM_WORKERS:=$(nproc 2>/dev/null || echo 1)}"
-export DOMAIN PLAY_DOMAIN PORTAINER_DOMAIN ACME_EMAIL PHOTO_IMAGE MINESIM_IMAGE MINESIM_WORKERS
+export DOMAIN PLAY_DOMAIN ADMIN_DOMAIN ACME_EMAIL PHOTO_IMAGE MINESIM_IMAGE MINESIM_WORKERS
 
 # ── kubectl (prefer a real kubectl, fall back to `k3s kubectl`) ───────────────
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
@@ -61,29 +61,51 @@ ensure_secret() {
 ensure_secret
 ok "Secret app-secrets ready."
 
-# ── Portainer basic-auth (Traefik) ────────────────────────────────────────────
+# ── Admin basic-auth (Traefik, guards admin.holtz.fr) ─────────────────────────
 # Strong random password, generated once and reused on redeploy. Stored in TWO
 # secrets, because Traefik's basicAuth secret must contain EXACTLY ONE key:
-#   portainer-basic-auth       — key `users`: apr1 hash in htpasswd form (Traefik)
-#   portainer-basic-auth-plain — key `plaintext`: clear password (`make password`)
+#   admin-basic-auth       — key `users`: apr1 hash in htpasswd form (Traefik)
+#   admin-basic-auth-plain — key `plaintext`: clear password (`make password`)
 ensure_basic_auth() {
-  if $KUBECTL -n web get secret portainer-basic-auth-plain >/dev/null 2>&1; then
-    info "Reusing existing Portainer basic-auth password."
+  if $KUBECTL -n web get secret admin-basic-auth-plain >/dev/null 2>&1; then
+    info "Reusing existing admin basic-auth password."
     return
   fi
   local pw hash
   pw="$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 32)"
   hash="$(openssl passwd -apr1 "$pw")"
-  $KUBECTL -n web create secret generic portainer-basic-auth \
+  $KUBECTL -n web create secret generic admin-basic-auth \
     --from-literal=users="admin:${hash}" \
     --dry-run=client -o yaml | $KUBECTL apply -f -
-  $KUBECTL -n web create secret generic portainer-basic-auth-plain \
+  $KUBECTL -n web create secret generic admin-basic-auth-plain \
     --from-literal=plaintext="$pw" \
     --dry-run=client -o yaml | $KUBECTL apply -f -
-  info "Generated a new Portainer basic-auth password (see: make password)."
+  info "Generated a new admin basic-auth password (see: make password)."
 }
 ensure_basic_auth
-ok "Secrets portainer-basic-auth{,-plain} ready."
+ok "Secrets admin-basic-auth{,-plain} ready."
+
+# ── Monitoring namespace + Grafana admin password ─────────────────────────────
+# The kube-prometheus-stack HelmChart also creates this namespace, but we need it
+# now so the Grafana admin Secret exists before Grafana's pod starts.
+info "Ensuring monitoring namespace …"
+$KUBECTL create namespace monitoring --dry-run=client -o yaml | $KUBECTL apply -f -
+
+ensure_grafana_admin() {
+  if $KUBECTL -n monitoring get secret grafana-admin >/dev/null 2>&1; then
+    info "Reusing existing Grafana admin password."
+    return
+  fi
+  local pw
+  pw="$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 32)"
+  $KUBECTL -n monitoring create secret generic grafana-admin \
+    --from-literal=admin-user=admin \
+    --from-literal=admin-password="$pw" \
+    --dry-run=client -o yaml | $KUBECTL apply -f -
+  info "Generated a new Grafana admin password (see: make password)."
+}
+ensure_grafana_admin
+ok "Secret grafana-admin ready."
 
 # ── Traefik: Let's Encrypt resolver + HTTP→HTTPS redirect ────────────────────
 info "Configuring Traefik (Let's Encrypt resolver) …"
@@ -106,7 +128,7 @@ for crd in ingressroutes.traefik.io middlewares.traefik.io; do
 done
 
 # ── Render + apply the rest (substituting only our known vars) ────────────────
-VARS='$DOMAIN $PLAY_DOMAIN $PORTAINER_DOMAIN $ACME_EMAIL $PHOTO_IMAGE $MINESIM_IMAGE $MINESIM_WORKERS'
+VARS='$DOMAIN $PLAY_DOMAIN $ADMIN_DOMAIN $ACME_EMAIL $PHOTO_IMAGE $MINESIM_IMAGE $MINESIM_WORKERS'
 RENDER="$(mktemp -d)"; trap 'rm -rf "$RENDER"' EXIT
 for f in manifests/15-middlewares.yaml \
          manifests/30-postgres.yaml \
@@ -114,10 +136,12 @@ for f in manifests/15-middlewares.yaml \
          manifests/40-photo-book.yaml \
          manifests/50-mine-sim.yaml \
          manifests/60-ingressroutes.yaml \
-         manifests/70-portainer.yaml; do
+         manifests/70-portainer.yaml \
+         manifests/80-monitoring.yaml \
+         manifests/85-admin-ingress.yaml; do
   envsubst "$VARS" < "$f" > "$RENDER/$(basename "$f")"
 done
-info "Applying application manifests …"
+info "Applying application + monitoring manifests …"
 $KUBECTL apply -f "$RENDER"
 
 ok "Deployed. Pods are starting:"
@@ -126,6 +150,8 @@ echo
 echo -e "  photo-book : ${GREEN}https://${DOMAIN}${RESET}"
 echo -e "  adminer    : ${GREEN}https://${DOMAIN}/db${RESET}"
 echo -e "  mine-sim   : ${GREEN}https://${PLAY_DOMAIN}${RESET}"
-echo -e "  portainer  : ${GREEN}https://${PORTAINER_DOMAIN}${RESET}"
+echo -e "  portainer  : ${GREEN}https://${ADMIN_DOMAIN}/portainer${RESET}"
+echo -e "  grafana    : ${GREEN}https://${ADMIN_DOMAIN}/grafana${RESET}"
 echo
-warn "DNS for ${DOMAIN} and ${PLAY_DOMAIN} must point to this VPS. TLS is issued on first HTTPS hit (~30 s)."
+warn "DNS A+AAAA for ${DOMAIN}, ${PLAY_DOMAIN} and ${ADMIN_DOMAIN} must point to this VPS. TLS is issued on first HTTPS hit (~30 s)."
+warn "Monitoring charts (kube-prometheus-stack, loki) install asynchronously — give them a few minutes: kubectl -n monitoring get pods"

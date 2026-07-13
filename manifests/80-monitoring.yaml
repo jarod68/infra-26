@@ -1,0 +1,126 @@
+# Observability stack, installed through k3s' helm-controller (same mechanism as
+# the bundled Traefik). Three pillars:
+#   • Metrics   — kube-prometheus-stack: Prometheus + node-exporter +
+#                 kube-state-metrics + Grafana (with default k8s dashboards).
+#   • Logs      — loki-stack: Loki (storage) + Promtail (ships every pod's stdout,
+#                 including Traefik's JSON access logs) → queryable in Grafana.
+#   • Requests  — Traefik access logs (enabled in 10-traefik-acme.yaml) land in
+#                 Loki via Promtail; that is our request-tracing layer.
+#
+# Grafana is exposed at https://${ADMIN_DOMAIN}/grafana (see 85-admin-ingress).
+#
+# NOTE: charts are intentionally left unpinned (installs latest). Once it's up,
+# pin `version:` to the installed chart for reproducibility — check with:
+#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   helm search repo kube-prometheus-stack loki-stack
+#
+# ⚠️ Footprint: this stack wants ~1.5–2 GB RAM on the node. On a small VPS,
+# watch `kubectl -n monitoring top pods` and trim retention/replicas if needed.
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: kube-prometheus-stack
+  namespace: kube-system
+spec:
+  repo: https://prometheus-community.github.io/helm-charts
+  chart: kube-prometheus-stack
+  targetNamespace: monitoring
+  createNamespace: true
+  valuesContent: |-
+    # Alerting not requested — drop Alertmanager to save resources.
+    alertmanager:
+      enabled: false
+
+    # k3s runs control-plane components embedded and does not expose the
+    # scrape endpoints these jobs expect; disable them so Prometheus stays green.
+    kubeControllerManager: { enabled: false }
+    kubeScheduler:         { enabled: false }
+    kubeProxy:             { enabled: false }
+    kubeEtcd:              { enabled: false }
+
+    grafana:
+      enabled: true
+      fullnameOverride: grafana     # predictable Service name: `grafana`
+      defaultDashboardsEnabled: true
+      admin:
+        existingSecret: grafana-admin
+        userKey: admin-user
+        passwordKey: admin-password
+      service:
+        port: 80
+      persistence:
+        enabled: true
+        size: 2Gi
+      # Served behind Traefik at /grafana — Grafana rewrites its own links.
+      grafana.ini:
+        server:
+          root_url: "https://${ADMIN_DOMAIN}/grafana/"
+          serve_from_sub_path: true
+      # NB: the Loki datasource is provisioned via the `loki-datasource` ConfigMap
+      # below (picked up by the datasource sidecar), NOT via additionalDataSources
+      # — the latter duplicates the default Prometheus and crashes Grafana with
+      # "only one datasource per organization can be marked as default".
+
+    prometheus:
+      prometheusSpec:
+        retention: 7d
+        resources:
+          requests: { cpu: 100m, memory: 400Mi }
+          limits:   { memory: 1Gi }
+        storageSpec:
+          volumeClaimTemplate:
+            spec:
+              accessModes: ["ReadWriteOnce"]
+              resources:
+                requests:
+                  storage: 10Gi
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: loki
+  namespace: kube-system
+spec:
+  repo: https://grafana.github.io/helm-charts
+  chart: loki-stack
+  targetNamespace: monitoring
+  createNamespace: true
+  valuesContent: |-
+    loki:
+      enabled: true
+      persistence:
+        enabled: true
+        size: 5Gi
+      config:
+        # 7-day log retention (deletes older chunks).
+        table_manager:
+          retention_deletes_enabled: true
+          retention_period: 168h
+    promtail:
+      enabled: true            # DaemonSet: ships every pod's stdout to Loki
+    # Grafana + Prometheus come from kube-prometheus-stack, not from here.
+    grafana:    { enabled: false }
+    prometheus: { enabled: false }
+    fluent-bit: { enabled: false }
+    filebeat:   { enabled: false }
+---
+# Loki datasource for Grafana, discovered by the kube-prometheus-stack datasource
+# sidecar (matches label `grafana_datasource`). isDefault:false — Prometheus stays
+# the single default. Kept out of the Helm values to avoid the default conflict.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-datasource
+  namespace: monitoring
+  labels:
+    grafana_datasource: "1"
+data:
+  loki-datasource.yaml: |-
+    apiVersion: 1
+    datasources:
+      - name: Loki
+        type: loki
+        uid: loki
+        access: proxy
+        url: http://loki:3100
+        isDefault: false

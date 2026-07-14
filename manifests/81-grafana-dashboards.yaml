@@ -8,7 +8,6 @@
 # $__range macros: this Grafana build doesn't interpolate built-in interval macros
 # in provisioned queries (custom template vars like $host still work).
 # No envsubst vars here — Grafana's own $vars are left intact by deploy.sh.
-
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -27,7 +26,7 @@ data:
       ],
       "timezone": "browser",
       "schemaVersion": 39,
-      "refresh": "30s",
+      "refresh": "1m",
       "time": {
         "from": "now-1h",
         "to": "now"
@@ -81,7 +80,7 @@ data:
                 "type": "loki",
                 "uid": "loki"
               },
-              "expr": "sum(rate({namespace=\"kube-system\", pod=~\"traefik.*\"} | json | RequestHost=~`$host` [5m]))"
+              "expr": "sum(rate({namespace=\"kube-system\", pod=~\"traefik.*\"} | json | __error__=\"\" | RequestHost=~`$host` [5m]))"
             }
           ],
           "datasource": {
@@ -113,7 +112,7 @@ data:
                 "type": "loki",
                 "uid": "loki"
               },
-              "expr": "sum(rate({namespace=\"kube-system\", pod=~\"traefik.*\"} | json | RequestHost=~`$host` | DownstreamStatus=~`4..` [5m]))"
+              "expr": "sum(rate({namespace=\"kube-system\", pod=~\"traefik.*\"} | json | __error__=\"\" | RequestHost=~`$host` | DownstreamStatus=~`4..` [5m]))"
             }
           ],
           "datasource": {
@@ -145,7 +144,7 @@ data:
                 "type": "loki",
                 "uid": "loki"
               },
-              "expr": "sum(rate({namespace=\"kube-system\", pod=~\"traefik.*\"} | json | RequestHost=~`$host` | DownstreamStatus=~`5..` [5m]))"
+              "expr": "sum(rate({namespace=\"kube-system\", pod=~\"traefik.*\"} | json | __error__=\"\" | RequestHost=~`$host` | DownstreamStatus=~`5..` [5m]))"
             }
           ],
           "datasource": {
@@ -178,7 +177,7 @@ data:
                 "uid": "loki"
               },
               "instant": true,
-              "expr": "quantile_over_time(0.95, {namespace=\"kube-system\", pod=~\"traefik.*\"} | json | RequestHost=~`$host` | unwrap Duration [5m])"
+              "expr": "quantile_over_time(0.95, {namespace=\"kube-system\", pod=~\"traefik.*\"} | json | __error__=\"\" | RequestHost=~`$host` | unwrap Duration [5m])"
             }
           ],
           "datasource": {
@@ -211,7 +210,7 @@ data:
                 "uid": "loki"
               },
               "instant": true,
-              "expr": "sum(count_over_time({namespace=\"kube-system\", pod=~\"traefik.*\"} | json | RequestHost=~`$host` | DownstreamStatus=`101` [1h]))"
+              "expr": "sum(count_over_time({namespace=\"kube-system\", pod=~\"traefik.*\"} | json | __error__=\"\" | RequestHost=~`$host` | request_Upgrade=`websocket` [1h]))"
             }
           ],
           "datasource": {
@@ -246,7 +245,7 @@ data:
                 "uid": "loki"
               },
               "legendFormat": "{{DownstreamStatus}}",
-              "expr": "sum by (DownstreamStatus) (rate({namespace=\"kube-system\", pod=~\"traefik.*\"} | json | RequestHost=~`$host` [5m]))"
+              "expr": "sum by (DownstreamStatus) (rate({namespace=\"kube-system\", pod=~\"traefik.*\"} | json | __error__=\"\" | RequestHost=~`$host` [5m]))"
             }
           ],
           "datasource": {
@@ -275,7 +274,7 @@ data:
                 "uid": "loki"
               },
               "legendFormat": "{{ServiceName}}",
-              "expr": "quantile_over_time(0.95, {namespace=\"kube-system\", pod=~\"traefik.*\"} | json | RequestHost=~`$host` | unwrap Duration [5m]) by (ServiceName)"
+              "expr": "quantile_over_time(0.95, {namespace=\"kube-system\", pod=~\"traefik.*\"} | json | __error__=\"\" | RequestHost=~`$host` | unwrap Duration [5m]) by (ServiceName)"
             }
           ],
           "datasource": {
@@ -304,7 +303,7 @@ data:
                 "uid": "loki"
               },
               "legendFormat": "{{RequestHost}}",
-              "expr": "sum by (RequestHost) (rate({namespace=\"kube-system\", pod=~\"traefik.*\"} | json [5m]))"
+              "expr": "sum by (RequestHost) (rate({namespace=\"kube-system\", pod=~\"traefik.*\"} | json | __error__=\"\" [5m]))"
             }
           ],
           "datasource": {
@@ -314,7 +313,7 @@ data:
         },
         {
           "type": "logs",
-          "title": "WebSocket upgrades (status 101)",
+          "title": "WebSocket upgrades",
           "gridPos": {
             "h": 8,
             "w": 12,
@@ -334,7 +333,8 @@ data:
                 "type": "loki",
                 "uid": "loki"
               },
-              "expr": "{namespace=\"kube-system\", pod=~\"traefik.*\"} | json | RequestHost=~`$host` | DownstreamStatus=`101`"
+              "expr": "{namespace=\"kube-system\", pod=~\"traefik.*\"} | json | __error__=\"\" | RequestHost=~`$host` | request_Upgrade=`websocket`",
+              "maxLines": 500
             }
           ],
           "datasource": {
@@ -364,7 +364,8 @@ data:
                 "type": "loki",
                 "uid": "loki"
               },
-              "expr": "{namespace=\"kube-system\", pod=~\"traefik.*\"} | json | RequestHost=~`$host`"
+              "expr": "{namespace=\"kube-system\", pod=~\"traefik.*\"} | json | __error__=\"\" | RequestHost=~`$host`",
+              "maxLines": 500
             }
           ],
           "datasource": {
@@ -384,7 +385,7 @@ data:
       ],
       "timezone": "browser",
       "schemaVersion": 39,
-      "refresh": "30s",
+      "refresh": "1m",
       "time": {
         "from": "now-1h",
         "to": "now"

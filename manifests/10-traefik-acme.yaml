@@ -52,3 +52,11 @@ spec:
       access:
         enabled: true
         format: json
+        # Also log the Upgrade request header so WebSocket handshakes are
+        # unambiguously identifiable in Loki (field `request_Upgrade=websocket`),
+        # independent of the logged status code.
+        fields:
+          headers:
+            defaultmode: drop
+            names:
+              Upgrade: keep

@@ -100,6 +100,19 @@ spec:
         table_manager:
           retention_deletes_enabled: true
           retention_period: 168h
+        # Single small node: avoid "too many outstanding requests" without
+        # burning CPU. Don't split short-range queries (fewer sub-requests in the
+        # queue), give the frontend a big queue, keep concurrency low so Loki
+        # doesn't starve the app under load.
+        limits_config:
+          split_queries_by_interval: 24h
+          max_query_parallelism: 8
+        querier:
+          max_concurrent: 4
+        frontend:
+          max_outstanding_per_tenant: 4096
+        query_scheduler:
+          max_outstanding_requests_per_tenant: 4096
     promtail:
       enabled: true            # DaemonSet: ships every pod's stdout to Loki
     # Grafana + Prometheus come from kube-prometheus-stack, not from here.

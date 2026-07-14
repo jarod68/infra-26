@@ -138,6 +138,7 @@ for f in manifests/15-middlewares.yaml \
          manifests/60-ingressroutes.yaml \
          manifests/70-portainer.yaml \
          manifests/80-monitoring.yaml \
+         manifests/81-grafana-dashboards.yaml \
          manifests/85-admin-ingress.yaml; do
   envsubst "$VARS" < "$f" > "$RENDER/$(basename "$f")"
 done

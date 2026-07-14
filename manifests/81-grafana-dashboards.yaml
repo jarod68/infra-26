@@ -1,0 +1,679 @@
+# Two provisioned Grafana dashboards (dashboards sidecar, label grafana_dashboard):
+#   • http-websocket.json — every HTTP/WS request + KPIs, from Traefik JSON access
+#     logs in Loki (datasource uid `loki`). This is the login home dashboard.
+#   • resources.json      — CPU / RAM / disk I/O per container and node totals,
+#     from Prometheus (cAdvisor + node-exporter). datasource uid `prometheus`.
+# Both are tagged `infra26` and cross-link via a "Dashboards" dropdown (top-left).
+# Rate/quantile windows are fixed ([5m], [1h]) rather than the $__rate_interval /
+# $__range macros: this Grafana build doesn't interpolate built-in interval macros
+# in provisioned queries (custom template vars like $host still work).
+# No envsubst vars here — Grafana's own $vars are left intact by deploy.sh.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  http-websocket.json: |-
+    {
+      "uid": "http-websocket",
+      "title": "HTTP & WebSocket",
+      "tags": [
+        "infra26",
+        "traefik"
+      ],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "refresh": "30s",
+      "time": {
+        "from": "now-1h",
+        "to": "now"
+      },
+      "links": [
+        {
+          "title": "Dashboards",
+          "type": "dashboards",
+          "asDropdown": true,
+          "tags": [
+            "infra26"
+          ],
+          "includeVars": false,
+          "keepTime": true,
+          "icon": "apps"
+        }
+      ],
+      "templating": {
+        "list": [
+          {
+            "name": "host",
+            "label": "Host",
+            "type": "custom",
+            "query": ".*,book.holtz.fr,play.holtz.fr,admin.holtz.fr",
+            "current": {
+              "text": ".*",
+              "value": ".*"
+            },
+            "includeAll": false
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "stat",
+          "title": "Requests/sec",
+          "gridPos": {
+            "h": 4,
+            "w": 5,
+            "x": 0,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "sum(rate({namespace=\"kube-system\", pod=~\"traefik.*\"} | json | RequestHost=~`$host` [5m]))"
+            }
+          ],
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "4xx/sec",
+          "gridPos": {
+            "h": 4,
+            "w": 5,
+            "x": 5,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "orange"
+              }
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "sum(rate({namespace=\"kube-system\", pod=~\"traefik.*\"} | json | RequestHost=~`$host` | DownstreamStatus=~`4..` [5m]))"
+            }
+          ],
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "5xx/sec",
+          "gridPos": {
+            "h": 4,
+            "w": 5,
+            "x": 10,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "red"
+              }
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "sum(rate({namespace=\"kube-system\", pod=~\"traefik.*\"} | json | RequestHost=~`$host` | DownstreamStatus=~`5..` [5m]))"
+            }
+          ],
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "p95 latency (5m)",
+          "gridPos": {
+            "h": 4,
+            "w": 5,
+            "x": 15,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ns",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "blue"
+              }
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "instant": true,
+              "expr": "quantile_over_time(0.95, {namespace=\"kube-system\", pod=~\"traefik.*\"} | json | RequestHost=~`$host` | unwrap Duration [5m])"
+            }
+          ],
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "WS upgrades (1h)",
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 20,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "purple"
+              }
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "instant": true,
+              "expr": "sum(count_over_time({namespace=\"kube-system\", pod=~\"traefik.*\"} | json | RequestHost=~`$host` | DownstreamStatus=`101` [1h]))"
+            }
+          ],
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Request rate by status",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 4
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": {
+                "fillOpacity": 20,
+                "stacking": {
+                  "mode": "normal"
+                }
+              }
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "legendFormat": "{{DownstreamStatus}}",
+              "expr": "sum by (DownstreamStatus) (rate({namespace=\"kube-system\", pod=~\"traefik.*\"} | json | RequestHost=~`$host` [5m]))"
+            }
+          ],
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "p95 latency by service",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 4
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ns"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "legendFormat": "{{ServiceName}}",
+              "expr": "quantile_over_time(0.95, {namespace=\"kube-system\", pod=~\"traefik.*\"} | json | RequestHost=~`$host` | unwrap Duration [5m]) by (ServiceName)"
+            }
+          ],
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Request rate by host",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 12
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "legendFormat": "{{RequestHost}}",
+              "expr": "sum by (RequestHost) (rate({namespace=\"kube-system\", pod=~\"traefik.*\"} | json [5m]))"
+            }
+          ],
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
+        },
+        {
+          "type": "logs",
+          "title": "WebSocket upgrades (status 101)",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 12
+          },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "prettifyLogMessage": true,
+            "enableLogDetails": true,
+            "sortOrder": "Descending"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{namespace=\"kube-system\", pod=~\"traefik.*\"} | json | RequestHost=~`$host` | DownstreamStatus=`101`"
+            }
+          ],
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
+        },
+        {
+          "type": "logs",
+          "title": "Access logs (all requests)",
+          "gridPos": {
+            "h": 10,
+            "w": 24,
+            "x": 0,
+            "y": 20
+          },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "prettifyLogMessage": true,
+            "enableLogDetails": true,
+            "sortOrder": "Descending"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{namespace=\"kube-system\", pod=~\"traefik.*\"} | json | RequestHost=~`$host`"
+            }
+          ],
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
+        }
+      ]
+    }
+  resources.json: |-
+    {
+      "uid": "resources",
+      "title": "Resources per container",
+      "tags": [
+        "infra26",
+        "resources"
+      ],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "refresh": "30s",
+      "time": {
+        "from": "now-1h",
+        "to": "now"
+      },
+      "links": [
+        {
+          "title": "Dashboards",
+          "type": "dashboards",
+          "asDropdown": true,
+          "tags": [
+            "infra26"
+          ],
+          "includeVars": false,
+          "keepTime": true,
+          "icon": "apps"
+        }
+      ],
+      "panels": [
+        {
+          "type": "stat",
+          "title": "Node CPU used",
+          "gridPos": {
+            "h": 4,
+            "w": 5,
+            "x": 0,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))"
+            }
+          ],
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Node RAM used",
+          "gridPos": {
+            "h": 4,
+            "w": 5,
+            "x": 5,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "1 - sum(node_memory_MemAvailable_bytes) / sum(node_memory_MemTotal_bytes)"
+            }
+          ],
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Disk read/s",
+          "gridPos": {
+            "h": 4,
+            "w": 5,
+            "x": 10,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "Bps",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "green"
+              }
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sum(rate(node_disk_read_bytes_total[5m]))"
+            }
+          ],
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Disk write/s",
+          "gridPos": {
+            "h": 4,
+            "w": 5,
+            "x": 15,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "Bps",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "orange"
+              }
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sum(rate(node_disk_written_bytes_total[5m]))"
+            }
+          ],
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Restarts (1h)",
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 20,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "red"
+              }
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sum(increase(kube_pod_container_status_restarts_total[1h]))"
+            }
+          ],
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "CPU by container (cores)",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 4
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "legendFormat": "{{namespace}}/{{pod}}",
+              "expr": "sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{container!=\"\", container!=\"POD\"}[5m]))"
+            }
+          ],
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Memory by container (working set)",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 4
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "legendFormat": "{{namespace}}/{{pod}}",
+              "expr": "sum by (namespace, pod) (container_memory_working_set_bytes{container!=\"\", container!=\"POD\"})"
+            }
+          ],
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Disk read by container",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 12
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "Bps"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "legendFormat": "{{namespace}}/{{pod}}",
+              "expr": "sum by (namespace, pod) (rate(container_fs_reads_bytes_total{container!=\"\"}[5m]))"
+            }
+          ],
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Disk write by container",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 12
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "Bps"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "legendFormat": "{{namespace}}/{{pod}}",
+              "expr": "sum by (namespace, pod) (rate(container_fs_writes_bytes_total{container!=\"\"}[5m]))"
+            }
+          ],
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ]
+    }

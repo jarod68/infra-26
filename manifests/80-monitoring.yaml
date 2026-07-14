@@ -41,7 +41,7 @@ spec:
     grafana:
       enabled: true
       fullnameOverride: grafana     # predictable Service name: `grafana`
-      defaultDashboardsEnabled: true
+      defaultDashboardsEnabled: false  # no clutter — only our two dashboards
       admin:
         existingSecret: grafana-admin
         userKey: admin-user
@@ -52,10 +52,14 @@ spec:
         enabled: true
         size: 2Gi
       # Served behind Traefik at /grafana — Grafana rewrites its own links.
+      # Land straight on the HTTP & WebSocket dashboard (the sidecar writes our
+      # dashboards to /tmp/dashboards/<data-key>).
       grafana.ini:
         server:
           root_url: "https://${ADMIN_DOMAIN}/grafana/"
           serve_from_sub_path: true
+        dashboards:
+          default_home_dashboard_path: /tmp/dashboards/http-websocket.json
       # NB: the Loki datasource is provisioned via the `loki-datasource` ConfigMap
       # below (picked up by the datasource sidecar), NOT via additionalDataSources
       # — the latter duplicates the default Prometheus and crashes Grafana with
@@ -99,7 +103,15 @@ spec:
     promtail:
       enabled: true            # DaemonSet: ships every pod's stdout to Loki
     # Grafana + Prometheus come from kube-prometheus-stack, not from here.
-    grafana:    { enabled: false }
+    # Disable loki-stack's OWN Grafana datasource ConfigMap: it ships a second
+    # "Loki" marked isDefault:true, which collides with Prometheus's default and
+    # breaks Grafana provisioning. We provision Loki ourselves (loki-datasource
+    # ConfigMap, uid=loki, isDefault:false) instead.
+    grafana:
+      enabled: false
+      sidecar:
+        datasources:
+          enabled: false
     prometheus: { enabled: false }
     fluent-bit: { enabled: false }
     filebeat:   { enabled: false }

@@ -9,6 +9,7 @@ freshly provisioned VPS with one command.
 | photo-book    | `https://book.holtz.fr`          | `web`       |
 | adminer       | `https://book.holtz.fr/db`       | `web`       |
 | mine-sim      | `https://play.holtz.fr`          | `web`       |
+| getaround     | `https://app.holtz.fr/getaround` | `web`       |
 | Portainer     | `https://admin.holtz.fr/portainer` | `web`     |
 | Grafana       | `https://admin.holtz.fr/grafana` | `monitoring`|
 | Prometheus / Loki | in-cluster only              | `monitoring`|
@@ -57,7 +58,7 @@ Encrypt TLS**. The whole thing runs on one node.
 
 ## 2. Quick start (fresh VPS)
 
-Point DNS first: **`book.holtz.fr`, `play.holtz.fr` and `admin.holtz.fr`** →
+Point DNS first: **`book.holtz.fr`, `play.holtz.fr`, `app.holtz.fr` and `admin.holtz.fr`** →
 the VPS public IP, with **both `A` and `AAAA`** records (the `AAAA` matters, see
 §6). Then, as root:
 
@@ -110,6 +111,9 @@ and image tags.
 |--------------------|------------------------------------------------|
 | `DOMAIN`           | photo-book host (`/db` → adminer)              |
 | `PLAY_DOMAIN`      | mine-sim host                                  |
+| `APP_DOMAIN`       | small-apps host (`/getaround`)                 |
+| `GETAROUND_IMAGE`  | getaround-scraper image (private Docker Hub)   |
+| `DOCKERHUB_USER` / `DOCKERHUB_TOKEN` | pull credentials for the private image (read-only token) |
 | `ADMIN_DOMAIN`     | admin surface (`/portainer`, `/grafana`)       |
 | `ACME_EMAIL`       | Let's Encrypt account e-mail                   |
 | `PHOTO_IMAGE` / `MINESIM_IMAGE` | app image tags                    |
@@ -139,6 +143,7 @@ Routes:
 | `Host(book) `                          | photo-book:3000   | hsts                           |
 | `Host(book) && /db`                    | adminer:8080      | hsts                           |
 | `Host(play)`                           | mine-sim:3200     | hsts                           |
+| `Host(app) && PathPrefix(/getaround)`  | getaround:3300    | hsts, getaround-slash, getaround-auth, getaround-strip |
 | `Host(admin) && /portainer`            | portainer:9000    | admin-auth, **stripPrefix**, hsts |
 | `Host(admin) && /grafana`              | grafana:80 (xns)  | admin-auth, hsts               |
 | `Host(admin) && /`                     | → redirect `/grafana` | admin-auth                 |
@@ -228,6 +233,7 @@ issued. Dual-stack makes Traefik answer the challenge on both families.
 | `photo-book-previews`  | Preview thumbnails (cache)                |
 | `photo-book-medium`    | Medium images (cache)                     |
 | `mine-sim-data`        | mine-sim admin password + SQLite DB       |
+| `getaround-data`       | getaround SQLite DB (zones, relevés)      |
 | `portainer-data`       | Portainer database                        |
 | Prometheus / Grafana / Loki | metrics, dashboards, logs (7d)       |
 
@@ -273,6 +279,7 @@ infra-26/
     ├── 35-adminer.yaml           # Deployment + Service
     ├── 40-photo-book.yaml        # Deployment + 3 PVCs + Service
     ├── 50-mine-sim.yaml          # Deployment + PVC + Service
+    ├── 55-getaround.yaml         # Deployment + PVC + Service (private image)
     ├── 60-ingressroutes.yaml     # book / book/db / play routes
     ├── 70-portainer.yaml         # Portainer (--base-url) + SA/ClusterRoleBinding + PVC
     ├── 80-monitoring.yaml        # HelmCharts: kube-prometheus-stack, loki-stack

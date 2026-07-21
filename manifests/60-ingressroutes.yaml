@@ -41,6 +41,29 @@ spec:
   tls:
     certResolver: letsencrypt
 ---
+# getaround — app.holtz.fr/getaround  (slash redirect + prefix strip, see
+# 15-middlewares.yaml; the app serves from / inside the pod)
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: getaround
+  namespace: web
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: Host(`${APP_DOMAIN}`) && PathPrefix(`/getaround`)
+      kind: Rule
+      services:
+        - name: getaround
+          port: 3300
+      middlewares:
+        - name: hsts
+        - name: getaround-slash
+        - name: getaround-auth
+        - name: getaround-strip
+  tls:
+    certResolver: letsencrypt
+---
 # mine-sim — play.holtz.fr  (WebSocket upgrades pass through transparently)
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute

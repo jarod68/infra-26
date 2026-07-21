@@ -19,13 +19,15 @@ set -a; . ./.env; set +a
 
 : "${DOMAIN:?DOMAIN missing in .env}"
 : "${PLAY_DOMAIN:?PLAY_DOMAIN missing in .env}"
+: "${APP_DOMAIN:?APP_DOMAIN missing in .env}"
 : "${ADMIN_DOMAIN:?ADMIN_DOMAIN missing in .env}"
 : "${ACME_EMAIL:?ACME_EMAIL missing in .env}"
 : "${PHOTO_IMAGE:?PHOTO_IMAGE missing in .env}"
 : "${MINESIM_IMAGE:?MINESIM_IMAGE missing in .env}"
+: "${GETAROUND_IMAGE:?GETAROUND_IMAGE missing in .env}"
 # One mine-sim worker per CPU core unless pinned in .env (1 ⇒ single process).
 : "${MINESIM_WORKERS:=$(nproc 2>/dev/null || echo 1)}"
-export DOMAIN PLAY_DOMAIN ADMIN_DOMAIN ACME_EMAIL PHOTO_IMAGE MINESIM_IMAGE MINESIM_WORKERS
+export DOMAIN PLAY_DOMAIN APP_DOMAIN ADMIN_DOMAIN ACME_EMAIL PHOTO_IMAGE MINESIM_IMAGE GETAROUND_IMAGE MINESIM_WORKERS
 
 # ── kubectl (prefer a real kubectl, fall back to `k3s kubectl`) ───────────────
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
@@ -61,6 +63,25 @@ ensure_secret() {
 ensure_secret
 ok "Secret app-secrets ready."
 
+# ── Docker Hub pull secret (getaround image is PRIVATE) ───────────────────────
+# Created/refreshed from DOCKERHUB_USER + DOCKERHUB_TOKEN in .env; an existing
+# secret is reused when the vars are absent (so a redeploy doesn't need them).
+ensure_regcred() {
+  if [[ -n "${DOCKERHUB_USER:-}" && -n "${DOCKERHUB_TOKEN:-}" ]]; then
+    $KUBECTL -n web create secret docker-registry regcred-dockerhub \
+      --docker-server=https://index.docker.io/v1/ \
+      --docker-username="$DOCKERHUB_USER" \
+      --docker-password="$DOCKERHUB_TOKEN" \
+      --dry-run=client -o yaml | $KUBECTL apply -f -
+    ok "Secret regcred-dockerhub ready (from .env)."
+  elif $KUBECTL -n web get secret regcred-dockerhub >/dev/null 2>&1; then
+    info "Reusing existing regcred-dockerhub."
+  else
+    die "GETAROUND_IMAGE is private: set DOCKERHUB_USER and DOCKERHUB_TOKEN in .env (a read-only access token)."
+  fi
+}
+ensure_regcred
+
 # ── Admin basic-auth (Traefik, guards admin.holtz.fr) ─────────────────────────
 # Strong random password, generated once and reused on redeploy. Stored in TWO
 # secrets, because Traefik's basicAuth secret must contain EXACTLY ONE key:
@@ -84,6 +105,27 @@ ensure_basic_auth() {
 }
 ensure_basic_auth
 ok "Secrets admin-basic-auth{,-plain} ready."
+
+# ── getaround basic-auth (guards app.holtz.fr/getaround) ──────────────────────
+# Same two-secret scheme as the admin auth (Traefik needs exactly one key).
+ensure_getaround_auth() {
+  if $KUBECTL -n web get secret getaround-basic-auth-plain >/dev/null 2>&1; then
+    info "Reusing existing getaround basic-auth password."
+    return
+  fi
+  local pw hash
+  pw="$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 32)"
+  hash="$(openssl passwd -apr1 "$pw")"
+  $KUBECTL -n web create secret generic getaround-basic-auth \
+    --from-literal=users="admin:${hash}" \
+    --dry-run=client -o yaml | $KUBECTL apply -f -
+  $KUBECTL -n web create secret generic getaround-basic-auth-plain \
+    --from-literal=plaintext="$pw" \
+    --dry-run=client -o yaml | $KUBECTL apply -f -
+  info "Generated a new getaround basic-auth password (see: make password)."
+}
+ensure_getaround_auth
+ok "Secrets getaround-basic-auth{,-plain} ready."
 
 # ── Monitoring namespace + Grafana admin password ─────────────────────────────
 # The kube-prometheus-stack HelmChart also creates this namespace, but we need it
@@ -128,13 +170,14 @@ for crd in ingressroutes.traefik.io middlewares.traefik.io; do
 done
 
 # ── Render + apply the rest (substituting only our known vars) ────────────────
-VARS='$DOMAIN $PLAY_DOMAIN $ADMIN_DOMAIN $ACME_EMAIL $PHOTO_IMAGE $MINESIM_IMAGE $MINESIM_WORKERS'
+VARS='$DOMAIN $PLAY_DOMAIN $APP_DOMAIN $ADMIN_DOMAIN $ACME_EMAIL $PHOTO_IMAGE $MINESIM_IMAGE $GETAROUND_IMAGE $MINESIM_WORKERS'
 RENDER="$(mktemp -d)"; trap 'rm -rf "$RENDER"' EXIT
 for f in manifests/15-middlewares.yaml \
          manifests/30-postgres.yaml \
          manifests/35-adminer.yaml \
          manifests/40-photo-book.yaml \
          manifests/50-mine-sim.yaml \
+         manifests/55-getaround.yaml \
          manifests/60-ingressroutes.yaml \
          manifests/70-portainer.yaml \
          manifests/80-monitoring.yaml \
@@ -151,8 +194,9 @@ echo
 echo -e "  photo-book : ${GREEN}https://${DOMAIN}${RESET}"
 echo -e "  adminer    : ${GREEN}https://${DOMAIN}/db${RESET}"
 echo -e "  mine-sim   : ${GREEN}https://${PLAY_DOMAIN}${RESET}"
+echo -e "  getaround  : ${GREEN}https://${APP_DOMAIN}/getaround${RESET}"
 echo -e "  portainer  : ${GREEN}https://${ADMIN_DOMAIN}/portainer${RESET}"
 echo -e "  grafana    : ${GREEN}https://${ADMIN_DOMAIN}/grafana${RESET}"
 echo
-warn "DNS A+AAAA for ${DOMAIN}, ${PLAY_DOMAIN} and ${ADMIN_DOMAIN} must point to this VPS. TLS is issued on first HTTPS hit (~30 s)."
+warn "DNS A+AAAA for ${DOMAIN}, ${PLAY_DOMAIN}, ${APP_DOMAIN} and ${ADMIN_DOMAIN} must point to this VPS. TLS is issued on first HTTPS hit (~30 s)."
 warn "Monitoring charts (kube-prometheus-stack, loki) install asynchronously — give them a few minutes: kubectl -n monitoring get pods"

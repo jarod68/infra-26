@@ -21,13 +21,14 @@ set -a; . ./.env; set +a
 : "${PLAY_DOMAIN:?PLAY_DOMAIN missing in .env}"
 : "${APP_DOMAIN:?APP_DOMAIN missing in .env}"
 : "${ADMIN_DOMAIN:?ADMIN_DOMAIN missing in .env}"
+: "${DTRACK_DOMAIN:?DTRACK_DOMAIN missing in .env}"
 : "${ACME_EMAIL:?ACME_EMAIL missing in .env}"
 : "${PHOTO_IMAGE:?PHOTO_IMAGE missing in .env}"
 : "${MINESIM_IMAGE:?MINESIM_IMAGE missing in .env}"
 : "${GETAROUND_IMAGE:?GETAROUND_IMAGE missing in .env}"
 # One mine-sim worker per CPU core unless pinned in .env (1 ⇒ single process).
 : "${MINESIM_WORKERS:=$(nproc 2>/dev/null || echo 1)}"
-export DOMAIN PLAY_DOMAIN APP_DOMAIN ADMIN_DOMAIN ACME_EMAIL PHOTO_IMAGE MINESIM_IMAGE GETAROUND_IMAGE MINESIM_WORKERS
+export DOMAIN PLAY_DOMAIN APP_DOMAIN ADMIN_DOMAIN DTRACK_DOMAIN ACME_EMAIL PHOTO_IMAGE MINESIM_IMAGE GETAROUND_IMAGE MINESIM_WORKERS
 
 # ── kubectl (prefer a real kubectl, fall back to `k3s kubectl`) ───────────────
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
@@ -44,16 +45,19 @@ command -v envsubst >/dev/null 2>&1 || die "envsubst is required (package: gette
 info "Applying namespace …"
 $KUBECTL apply -f manifests/00-namespace.yaml
 
+gen_pw() { openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 32; }
+# Read one key out of the app-secrets secret (empty if the secret/key is absent).
+read_secret_key() { $KUBECTL -n web get secret app-secrets -o "jsonpath={.data.$1}" 2>/dev/null | base64 -d 2>/dev/null || true; }
+
 ensure_secret() {
-  local pw
-  if $KUBECTL -n web get secret app-secrets >/dev/null 2>&1; then
-    pw="$($KUBECTL -n web get secret app-secrets -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d)"
-    info "Reusing existing Postgres password from app-secrets."
-  else
-    pw="$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 32)"
-    info "Generated a new Postgres password."
-  fi
-  local args=(--from-literal=POSTGRES_PASSWORD="$pw")
+  # Reuse existing passwords so a redeploy never rotates a live DB credential;
+  # generate any that are still missing.
+  local pw dtpw
+  pw="$(read_secret_key POSTGRES_PASSWORD)"
+  dtpw="$(read_secret_key DTRACK_DB_PASSWORD)"
+  [[ -n "$pw"   ]] && info "Reusing existing Postgres password."               || { pw="$(gen_pw)";   info "Generated a new Postgres password."; }
+  [[ -n "$dtpw" ]] && info "Reusing existing Dependency-Track DB password."     || { dtpw="$(gen_pw)"; info "Generated a new Dependency-Track DB password."; }
+  local args=(--from-literal=POSTGRES_PASSWORD="$pw" --from-literal=DTRACK_DB_PASSWORD="$dtpw")
   [[ -n "${VAPID_PUBLIC_KEY:-}"  ]] && args+=(--from-literal=VAPID_PUBLIC_KEY="$VAPID_PUBLIC_KEY")
   [[ -n "${VAPID_PRIVATE_KEY:-}" ]] && args+=(--from-literal=VAPID_PRIVATE_KEY="$VAPID_PRIVATE_KEY")
   [[ -n "${VAPID_SUBJECT:-}"     ]] && args+=(--from-literal=VAPID_SUBJECT="$VAPID_SUBJECT")
@@ -170,7 +174,7 @@ for crd in ingressroutes.traefik.io middlewares.traefik.io; do
 done
 
 # ── Render + apply the rest (substituting only our known vars) ────────────────
-VARS='$DOMAIN $PLAY_DOMAIN $APP_DOMAIN $ADMIN_DOMAIN $ACME_EMAIL $PHOTO_IMAGE $MINESIM_IMAGE $GETAROUND_IMAGE $MINESIM_WORKERS'
+VARS='$DOMAIN $PLAY_DOMAIN $APP_DOMAIN $ADMIN_DOMAIN $DTRACK_DOMAIN $ACME_EMAIL $PHOTO_IMAGE $MINESIM_IMAGE $GETAROUND_IMAGE $MINESIM_WORKERS'
 RENDER="$(mktemp -d)"; trap 'rm -rf "$RENDER"' EXIT
 for f in manifests/15-middlewares.yaml \
          manifests/30-postgres.yaml \
@@ -182,7 +186,8 @@ for f in manifests/15-middlewares.yaml \
          manifests/70-portainer.yaml \
          manifests/80-monitoring.yaml \
          manifests/81-grafana-dashboards.yaml \
-         manifests/85-admin-ingress.yaml; do
+         manifests/85-admin-ingress.yaml \
+         manifests/90-dependency-track.yaml; do
   envsubst "$VARS" < "$f" > "$RENDER/$(basename "$f")"
 done
 info "Applying application + monitoring manifests …"
@@ -197,6 +202,8 @@ echo -e "  mine-sim   : ${GREEN}https://${PLAY_DOMAIN}${RESET}"
 echo -e "  getaround  : ${GREEN}https://${APP_DOMAIN}/getaround${RESET}"
 echo -e "  portainer  : ${GREEN}https://${ADMIN_DOMAIN}/portainer${RESET}"
 echo -e "  grafana    : ${GREEN}https://${ADMIN_DOMAIN}/grafana${RESET}"
+echo -e "  dep-track  : ${GREEN}https://${DTRACK_DOMAIN}${RESET}  (UI behind admin basic-auth; first login admin/admin)"
 echo
-warn "DNS A+AAAA for ${DOMAIN}, ${PLAY_DOMAIN}, ${APP_DOMAIN} and ${ADMIN_DOMAIN} must point to this VPS. TLS is issued on first HTTPS hit (~30 s)."
+warn "DNS A+AAAA for ${DOMAIN}, ${PLAY_DOMAIN}, ${APP_DOMAIN}, ${ADMIN_DOMAIN} and ${DTRACK_DOMAIN} must point to this VPS. TLS is issued on first HTTPS hit (~30 s)."
+warn "Dependency-Track's apiserver is JVM-based (4 GB heap min — it refuses to start below) and takes a few minutes on first boot: kubectl -n web rollout status deploy/dtrack-apiserver"
 warn "Monitoring charts (kube-prometheus-stack, loki) install asynchronously — give them a few minutes: kubectl -n monitoring get pods"

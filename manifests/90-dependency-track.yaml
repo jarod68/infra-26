@@ -1,0 +1,198 @@
+# ── Dependency-Track — SBOM analysis / continuous SCA ─────────────────────────
+# https://${DTRACK_DOMAIN}
+#   · dtrack-apiserver  (JVM, heavy)  — analysis engine + REST API
+#   · dtrack-frontend   (nginx SPA)   — web UI, talks to the API same-origin
+#   · dtrack-postgres                 — dedicated DB (kept apart from the app DB)
+#
+# The UI is gated by the shared admin basic-auth (see `make password`) on top of
+# Dependency-Track's own login. /api, /health and /.well-known stay open (no
+# basic-auth) so CI can POST SBOMs with an X-Api-Key and the SPA can reach the API.
+
+# ── Dedicated PostgreSQL ──────────────────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: dtrack-postgres-data, namespace: web }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 2Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: dtrack-postgres, namespace: web }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }        # single RWO volume — never two pods at once
+  selector: { matchLabels: { app: dtrack-postgres } }
+  template:
+    metadata: { labels: { app: dtrack-postgres } }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - { name: POSTGRES_DB, value: dtrack }
+            - { name: POSTGRES_USER, value: dtrack }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: app-secrets, key: DTRACK_DB_PASSWORD }
+            # initdb owns a clean sub-dir on the PVC.
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "dtrack", "-d", "dtrack"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: dtrack-postgres-data }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: dtrack-postgres, namespace: web }
+spec:
+  selector: { app: dtrack-postgres }
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+# ── API server (analysis engine + REST API) ───────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: dtrack-apiserver-data, namespace: web }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 5Gi } }   # NVD mirror + Lucene indexes live here
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: dtrack-apiserver, namespace: web }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }        # single RWO volume
+  selector: { matchLabels: { app: dtrack-apiserver } }
+  template:
+    metadata: { labels: { app: dtrack-apiserver } }
+    spec:
+      # The apiserver image runs as uid 1000; fsGroup makes /data writable.
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: apiserver
+          image: dependencytrack/apiserver:4.12.7
+          env:
+            - { name: ALPINE_DATABASE_MODE, value: external }
+            - { name: ALPINE_DATABASE_URL, value: "jdbc:postgresql://dtrack-postgres:5432/dtrack" }
+            - { name: ALPINE_DATABASE_DRIVER, value: org.postgresql.Driver }
+            - { name: ALPINE_DATABASE_USERNAME, value: dtrack }
+            - name: ALPINE_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: app-secrets, key: DTRACK_DB_PASSWORD }
+            # DT's RequirementsVerifier HARD-REFUSES to start with a max heap
+            # below 4 GB ("requires a minimum of 4GB RAM (heap). Cannot continue").
+            - { name: EXTRA_JAVA_OPTIONS, value: "-Xmx4g" }
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - { name: data, mountPath: /data }
+          # First boot runs DB migrations + builds Lucene indexes; allow a long
+          # warm-up before liveness starts killing the pod.
+          startupProbe:
+            httpGet: { path: /api/version, port: 8080 }
+            periodSeconds: 10
+            failureThreshold: 40            # up to ~7 min to come up
+          readinessProbe:
+            httpGet: { path: /api/version, port: 8080 }
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: /api/version, port: 8080 }
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests: { cpu: 500m, memory: 4Gi }   # 4 GB heap + JVM overhead
+            limits: { memory: 5Gi }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: dtrack-apiserver-data }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: dtrack-apiserver, namespace: web }
+spec:
+  selector: { app: dtrack-apiserver }
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+# ── Frontend (nginx SPA) ──────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: dtrack-frontend, namespace: web }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: dtrack-frontend } }
+  template:
+    metadata: { labels: { app: dtrack-frontend } }
+    spec:
+      containers:
+        - name: frontend
+          image: dependencytrack/frontend:4.12.7
+          env:
+            # Same-origin API — the IngressRoute below sends /api to the apiserver.
+            - { name: API_BASE_URL, value: "https://${DTRACK_DOMAIN}" }
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: dtrack-frontend, namespace: web }
+spec:
+  selector: { app: dtrack-frontend }
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+# ── Routing (dtrack.holtz.fr) ─────────────────────────────────────────────────
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata: { name: dtrack, namespace: web }
+spec:
+  entryPoints: [websecure]
+  routes:
+    # API / health / OIDC discovery → apiserver. No basic-auth: CI uploads SBOMs
+    # here with an X-Api-Key, and the browser uses Dependency-Track's own token.
+    - match: Host(`${DTRACK_DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/health`) || PathPrefix(`/.well-known`))
+      kind: Rule
+      priority: 20
+      services:
+        - name: dtrack-apiserver
+          port: 8080
+      middlewares:
+        - name: hsts
+    # Everything else → the UI, behind the shared admin basic-auth.
+    - match: Host(`${DTRACK_DOMAIN}`)
+      kind: Rule
+      priority: 10
+      services:
+        - name: dtrack-frontend
+          port: 8080
+      middlewares:
+        - name: admin-auth
+        - name: hsts
+  tls:
+    certResolver: letsencrypt

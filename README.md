@@ -12,6 +12,7 @@ freshly provisioned VPS with one command.
 | getaround     | `https://app.holtz.fr/getaround` | `web`       |
 | Portainer     | `https://admin.holtz.fr/portainer` | `web`     |
 | Grafana       | `https://admin.holtz.fr/grafana` | `monitoring`|
+| Dependency-Track | `https://dtrack.holtz.fr`     | `web`       |
 | Prometheus / Loki | in-cluster only              | `monitoring`|
 
 Everything sits behind **Traefik** (k3s' bundled ingress) with **free Let's
@@ -58,9 +59,9 @@ Encrypt TLS**. The whole thing runs on one node.
 
 ## 2. Quick start (fresh VPS)
 
-Point DNS first: **`book.holtz.fr`, `play.holtz.fr`, `app.holtz.fr` and `admin.holtz.fr`** →
-the VPS public IP, with **both `A` and `AAAA`** records (the `AAAA` matters, see
-§6). Then, as root:
+Point DNS first: **`book.holtz.fr`, `play.holtz.fr`, `app.holtz.fr`, `admin.holtz.fr`
+and `dtrack.holtz.fr`** → the VPS public IP, with **both `A` and `AAAA`** records
+(the `AAAA` matters, see §6). Then, as root:
 
 ```bash
 git clone <this-repo> infra-26 && cd infra-26
@@ -90,10 +91,11 @@ make password
 
 `deploy.sh` is a thin, idempotent renderer:
 
-1. Loads `.env`, requires `DOMAIN`, `PLAY_DOMAIN`, `ADMIN_DOMAIN`, `ACME_EMAIL`,
-   `PHOTO_IMAGE`, `MINESIM_IMAGE`.
+1. Loads `.env`, requires `DOMAIN`, `PLAY_DOMAIN`, `APP_DOMAIN`, `ADMIN_DOMAIN`,
+   `DTRACK_DOMAIN`, `ACME_EMAIL`, `PHOTO_IMAGE`, `MINESIM_IMAGE`, `GETAROUND_IMAGE`.
 2. **Generates secrets once** and reuses them on every re-run:
-   - `app-secrets` → Postgres password (+ optional VAPID push keys).
+   - `app-secrets` → Postgres password + Dependency-Track DB password
+     (+ optional VAPID push keys).
    - `admin-basic-auth` (apr1 hash for Traefik) + `admin-basic-auth-plain`
      (clear text for `make password`).
    - `grafana-admin` → Grafana admin user/password.
@@ -115,6 +117,7 @@ and image tags.
 | `GETAROUND_IMAGE`  | getaround-scraper image (private Docker Hub)   |
 | `DOCKERHUB_USER` / `DOCKERHUB_TOKEN` | pull credentials for the private image (read-only token) |
 | `ADMIN_DOMAIN`     | admin surface (`/portainer`, `/grafana`)       |
+| `DTRACK_DOMAIN`    | Dependency-Track host (SBOM analysis)          |
 | `ACME_EMAIL`       | Let's Encrypt account e-mail                   |
 | `PHOTO_IMAGE` / `MINESIM_IMAGE` | app image tags                    |
 | `MINESIM_WORKERS`  | auto = host CPU count (mine-sim cluster size)  |
@@ -147,6 +150,8 @@ Routes:
 | `Host(admin) && /portainer`            | portainer:9000    | admin-auth, **stripPrefix**, hsts |
 | `Host(admin) && /grafana`              | grafana:80 (xns)  | admin-auth, hsts               |
 | `Host(admin) && /`                     | → redirect `/grafana` | admin-auth                 |
+| `Host(dtrack) && (/api\|/health\|/.well-known)` | dtrack-apiserver:8080 | hsts (open: API-key auth) |
+| `Host(dtrack)`                         | dtrack-frontend:8080 | admin-auth, hsts            |
 
 The whole **`admin.holtz.fr`** surface is gated by **basic-auth**
 (`admin-basic-auth`, password in `make password`) on top of each app's own login.
@@ -234,6 +239,8 @@ issued. Dual-stack makes Traefik answer the challenge on both families.
 | `photo-book-medium`    | Medium images (cache)                     |
 | `mine-sim-data`        | mine-sim admin password + SQLite DB       |
 | `getaround-data`       | getaround SQLite DB (zones, relevés)      |
+| `dtrack-postgres-data` | Dependency-Track PostgreSQL database      |
+| `dtrack-apiserver-data`| DT NVD mirror + Lucene indexes (`/data`)  |
 | `portainer-data`       | Portainer database                        |
 | Prometheus / Grafana / Loki | metrics, dashboards, logs (7d)       |
 
@@ -285,7 +292,8 @@ infra-26/
     ├── 80-monitoring.yaml        # HelmCharts: kube-prometheus-stack, loki-stack
     │                             #   + Loki datasource ConfigMap
     ├── 81-grafana-dashboards.yaml# 2 provisioned dashboards (ConfigMap)
-    └── 85-admin-ingress.yaml     # admin.holtz.fr: auth + /portainer + /grafana + redirect
+    ├── 85-admin-ingress.yaml     # admin.holtz.fr: auth + /portainer + /grafana + redirect
+    └── 90-dependency-track.yaml  # dtrack.holtz.fr: apiserver + frontend + dedicated postgres
 ```
 
 ---
@@ -310,3 +318,68 @@ infra-26/
   *and* the `stripPrefix` middleware.
 - **Loki *"too many outstanding requests"*** → single-node query tuning in
   `80-monitoring.yaml`.
+
+---
+
+## 11. Dependency-Track & SBOM ingestion
+
+[Dependency-Track](https://dependencytrack.org/) provides continuous SCA: it
+stores an SBOM per project/version and re-analyses it against the NVD / OSV /
+GitHub advisories as they update, so vulnerabilities surface even *after* a
+build. It lives entirely in namespace `web` (`90-dependency-track.yaml`):
+
+```
+dtrack-frontend (nginx SPA) ──► https://dtrack.holtz.fr        (admin basic-auth + DT login)
+dtrack-apiserver (JVM)      ──► https://dtrack.holtz.fr/api     (open: X-Api-Key)
+dtrack-postgres             ──► dedicated DB, own PVC
+```
+
+- **UI** is behind the shared **admin basic-auth** (`make password`) on top of
+  DT's own login (first login `admin` / `admin`, forced change).
+- **`/api`, `/health`, `/.well-known`** are **not** basic-auth gated so CI can
+  push SBOMs with an API key and the SPA can reach the API same-origin.
+- The apiserver is **JVM-based** and **hard-refuses to start with a max heap
+  below 4 GB** (`RequirementsVerifier`) — so `EXTRA_JAVA_OPTIONS=-Xmx4g`,
+  `requests 4Gi / limits 5Gi`. First boot runs migrations and builds indexes (a
+  few minutes; a `startupProbe` covers it): `make logs-dtrack`.
+- DNS: add an **A + AAAA** record for `dtrack.holtz.fr` → this VPS (or a
+  `*.holtz.fr` wildcard). TLS is issued on the first HTTPS hit.
+
+### Automatic SBOM import from CI (Syft → Dependency-Track)
+
+Each app's build pipeline generates a **CycloneDX** SBOM with **Syft** from the
+freshly-pushed image, scans it with **Grype** (fast fail-on-critical gate), and
+uploads the SBOM to Dependency-Track. DT then tracks it continuously.
+
+```
+build image ─► syft <image> -o cyclonedx-json@1.6 ─► grype (gate) ─► POST /api/v1/bom (autoCreate)
+```
+
+> Pin the CycloneDX spec to **1.6**: recent Syft defaults to 1.7, which
+> Dependency-Track 4.12 rejects with **HTTP 400** (it supports up to 1.6).
+
+**One-time setup in the DT UI** — *Administration → Access Management → Teams →
+Automation* (or a new team):
+
+1. Grant the team the permissions `BOM_UPLOAD`, `PROJECT_CREATION_UPLOAD`,
+   `VIEW_PORTFOLIO`.
+2. Copy its **API key**.
+
+**GitHub repo secrets** (per app repo that uploads):
+
+| Secret              | Value                                                    |
+|---------------------|----------------------------------------------------------|
+| `DTRACK_URL`        | `https://dtrack.holtz.fr`                                |
+| `DTRACK_API_KEY`    | the automation-team API key                              |
+| `DTRACK_BASIC_AUTH` | `admin:<pw>` — Traefik basic-auth in front of the host, only if `/api` is gated (`make password` → *admin basic-auth*) |
+
+> `DTRACK_BASIC_AUTH` is a **safety for a basic-auth-gated `/api`**: the CI curl
+> sends it only when set, alongside the `X-Api-Key`. In the shipped manifest the
+> **`/api` route is open** (no basic-auth) — the SPA and CI authenticate to
+> Dependency-Track directly (Bearer / API key), and only the **UI** route is
+> behind `admin-auth`. Gating `/api` too would 401 the web UI's own Bearer calls,
+> so leave it open; then CI needs only `DTRACK_URL` + `DTRACK_API_KEY` and you can
+> drop `DTRACK_BASIC_AUTH`.
+
+Wired up in **mine-sim** (`.github/workflows/ci.yml`, the `sbom` job); replicate
+the same job in the other repos to onboard them.

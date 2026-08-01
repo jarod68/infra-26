@@ -3,7 +3,8 @@ export KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
 KUBECTL := $(shell command -v kubectl >/dev/null 2>&1 && echo kubectl || echo k3s kubectl)
 
 .PHONY: help bootstrap deploy update restart status status-mon password \
-        logs-photo logs-mine logs-getaround logs-traefik logs-db logs-grafana logs-loki
+        logs-photo logs-mine logs-getaround logs-traefik logs-db logs-grafana logs-loki \
+        logs-dtrack logs-dtrack-db
 
 help:
 	@echo "Targets:"
@@ -14,7 +15,7 @@ help:
 	@echo "  status        Show pods, services, ingressroutes and volumes (web)."
 	@echo "  status-mon    Show the monitoring stack (pods, svc, pvc)."
 	@echo "  password      Print the generated Postgres / admin / Grafana passwords."
-	@echo "  logs-photo|logs-mine|logs-getaround|logs-db|logs-traefik|logs-grafana|logs-loki  Tail logs."
+	@echo "  logs-photo|logs-mine|logs-getaround|logs-db|logs-dtrack|logs-dtrack-db|logs-traefik|logs-grafana|logs-loki  Tail logs."
 
 bootstrap:
 	sudo ./bootstrap.sh
@@ -53,6 +54,10 @@ logs-mine:
 	$(KUBECTL) -n web logs -f deploy/mine-sim
 logs-getaround:
 	$(KUBECTL) -n web logs -f deploy/getaround
+logs-dtrack:
+	$(KUBECTL) -n web logs -f deploy/dtrack-apiserver
+logs-dtrack-db:
+	$(KUBECTL) -n web logs -f deploy/dtrack-postgres
 logs-db:
 	$(KUBECTL) -n web logs -f deploy/postgres
 logs-traefik:

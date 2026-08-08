@@ -1,30 +1,27 @@
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata: { name: mine-sim-data, namespace: web }
-spec:
-  accessModes: [ReadWriteOnce]
-  resources: { requests: { storage: 1Gi } }
----
+# mine-sim — full-local build. The whole game runs in the browser (Web Worker +
+# IndexedDB); the container is just a zero-dependency static file server. That
+# makes it fully stateless: no DB, no WebSocket, no game rooms — so it scales
+# horizontally and rolls without downtime.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mine-sim
   namespace: web
 spec:
-  replicas: 1            # in-memory game rooms + local SQLite ⇒ single instance
+  replicas: 2            # stateless static server ⇒ free to run multiple pods
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
   selector:
     matchLabels: { app: mine-sim }
   template:
     metadata:
       labels: { app: mine-sim }
     spec:
-      # Image runs as `node` (uid 1000); fsGroup makes /data (DATA_DIR) writable.
       securityContext:
+        runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
-        fsGroup: 1000
       containers:
         - name: mine-sim
           image: ${MINESIM_IMAGE}
@@ -32,23 +29,15 @@ spec:
           env:
             - { name: NODE_ENV, value: production }
             - { name: PORT, value: "3200" }
-            - { name: DATA_DIR, value: /data }
-            - { name: ALLOWED_ORIGINS, value: "https://${PLAY_DOMAIN}" }
-            # One worker per host CPU core (1 ⇒ single process). Set by deploy.sh.
-            - { name: WORKERS, value: "${MINESIM_WORKERS}" }
           ports:
             - containerPort: 3200
-          volumeMounts:
-            - { name: data, mountPath: /data }
           readinessProbe:
-            tcpSocket: { port: 3200 }
-            initialDelaySeconds: 5
+            httpGet: { path: /, port: 3200 }
+            initialDelaySeconds: 3
             periodSeconds: 10
           resources:
-            requests: { cpu: 50m, memory: 96Mi }
-      volumes:
-        - name: data
-          persistentVolumeClaim: { claimName: mine-sim-data }
+            requests: { cpu: 25m, memory: 48Mi }
+            limits: { memory: 96Mi }
 ---
 apiVersion: v1
 kind: Service

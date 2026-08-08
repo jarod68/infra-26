@@ -120,7 +120,6 @@ and image tags.
 | `DTRACK_DOMAIN`    | Dependency-Track host (SBOM analysis)          |
 | `ACME_EMAIL`       | Let's Encrypt account e-mail                   |
 | `PHOTO_IMAGE` / `MINESIM_IMAGE` | app image tags                    |
-| `MINESIM_WORKERS`  | auto = host CPU count (mine-sim cluster size)  |
 | `VAPID_*`          | optional Web-Push keys for photo-book          |
 
 ---
@@ -237,7 +236,6 @@ issued. Dual-stack makes Traefik answer the challenge on both families.
 | `photo-book-photos`    | Original photos                           |
 | `photo-book-previews`  | Preview thumbnails (cache)                |
 | `photo-book-medium`    | Medium images (cache)                     |
-| `mine-sim-data`        | mine-sim admin password + SQLite DB       |
 | `getaround-data`       | getaround SQLite DB (zones, relevés)      |
 | `dtrack-postgres-data` | Dependency-Track PostgreSQL database      |
 | `dtrack-apiserver-data`| DT NVD mirror + Lucene indexes (`/data`)  |
@@ -285,7 +283,7 @@ infra-26/
     ├── 30-postgres.yaml          # Deployment + PVC + Service
     ├── 35-adminer.yaml           # Deployment + Service
     ├── 40-photo-book.yaml        # Deployment + 3 PVCs + Service
-    ├── 50-mine-sim.yaml          # Deployment + PVC + Service
+    ├── 50-mine-sim.yaml          # Deployment (static, x2) + Service
     ├── 55-getaround.yaml         # Deployment + PVC + Service (private image)
     ├── 60-ingressroutes.yaml     # book / book/db / play routes
     ├── 70-portainer.yaml         # Portainer (--base-url) + SA/ClusterRoleBinding + PVC

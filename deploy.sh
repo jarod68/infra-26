@@ -26,9 +26,7 @@ set -a; . ./.env; set +a
 : "${PHOTO_IMAGE:?PHOTO_IMAGE missing in .env}"
 : "${MINESIM_IMAGE:?MINESIM_IMAGE missing in .env}"
 : "${GETAROUND_IMAGE:?GETAROUND_IMAGE missing in .env}"
-# One mine-sim worker per CPU core unless pinned in .env (1 ⇒ single process).
-: "${MINESIM_WORKERS:=$(nproc 2>/dev/null || echo 1)}"
-export DOMAIN PLAY_DOMAIN APP_DOMAIN ADMIN_DOMAIN DTRACK_DOMAIN ACME_EMAIL PHOTO_IMAGE MINESIM_IMAGE GETAROUND_IMAGE MINESIM_WORKERS
+export DOMAIN PLAY_DOMAIN APP_DOMAIN ADMIN_DOMAIN DTRACK_DOMAIN ACME_EMAIL PHOTO_IMAGE MINESIM_IMAGE GETAROUND_IMAGE
 
 # ── kubectl (prefer a real kubectl, fall back to `k3s kubectl`) ───────────────
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
@@ -174,7 +172,7 @@ for crd in ingressroutes.traefik.io middlewares.traefik.io; do
 done
 
 # ── Render + apply the rest (substituting only our known vars) ────────────────
-VARS='$DOMAIN $PLAY_DOMAIN $APP_DOMAIN $ADMIN_DOMAIN $DTRACK_DOMAIN $ACME_EMAIL $PHOTO_IMAGE $MINESIM_IMAGE $GETAROUND_IMAGE $MINESIM_WORKERS'
+VARS='$DOMAIN $PLAY_DOMAIN $APP_DOMAIN $ADMIN_DOMAIN $DTRACK_DOMAIN $ACME_EMAIL $PHOTO_IMAGE $MINESIM_IMAGE $GETAROUND_IMAGE'
 RENDER="$(mktemp -d)"; trap 'rm -rf "$RENDER"' EXIT
 for f in manifests/15-middlewares.yaml \
          manifests/30-postgres.yaml \

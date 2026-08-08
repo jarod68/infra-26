@@ -64,7 +64,7 @@ spec:
   tls:
     certResolver: letsencrypt
 ---
-# mine-sim — play.holtz.fr  (WebSocket upgrades pass through transparently)
+# mine-sim — play.holtz.fr  (full-local build: plain static files, no WebSocket)
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:

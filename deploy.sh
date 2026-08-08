@@ -176,7 +176,6 @@ VARS='$DOMAIN $PLAY_DOMAIN $APP_DOMAIN $ADMIN_DOMAIN $DTRACK_DOMAIN $ACME_EMAIL 
 RENDER="$(mktemp -d)"; trap 'rm -rf "$RENDER"' EXIT
 for f in manifests/15-middlewares.yaml \
          manifests/30-postgres.yaml \
-         manifests/35-adminer.yaml \
          manifests/40-photo-book.yaml \
          manifests/50-mine-sim.yaml \
          manifests/55-getaround.yaml \
@@ -195,7 +194,6 @@ ok "Deployed. Pods are starting:"
 $KUBECTL -n web get pods
 echo
 echo -e "  photo-book : ${GREEN}https://${DOMAIN}${RESET}"
-echo -e "  adminer    : ${GREEN}https://${DOMAIN}/db${RESET}"
 echo -e "  mine-sim   : ${GREEN}https://${PLAY_DOMAIN}${RESET}"
 echo -e "  getaround  : ${GREEN}https://${APP_DOMAIN}/getaround${RESET}"
 echo -e "  portainer  : ${GREEN}https://${ADMIN_DOMAIN}/portainer${RESET}"

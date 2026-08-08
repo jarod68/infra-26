@@ -7,7 +7,6 @@ freshly provisioned VPS with one command.
 | What          | URL                              | Namespace   |
 |---------------|----------------------------------|-------------|
 | photo-book    | `https://book.holtz.fr`          | `web`       |
-| adminer       | `https://book.holtz.fr/db`       | `web`       |
 | mine-sim      | `https://play.holtz.fr`          | `web`       |
 | getaround     | `https://app.holtz.fr/getaround` | `web`       |
 | Portainer     | `https://admin.holtz.fr/portainer` | `web`     |
@@ -36,7 +35,7 @@ Encrypt TLS**. The whole thing runs on one node.
       ┌─────────────────────┘               └───────────────┐
       ▼                                                      ▼
 ┌─────────────────────── namespace: web ───────────┐  ┌── namespace: monitoring ──┐
-│ photo-book ─ postgres ─ adminer ─ mine-sim        │  │ Grafana                   │
+│ photo-book ─ postgres ─ mine-sim ─ getaround      │  │ Grafana                   │
 │ Portainer (cluster-admin UI)                      │  │ Prometheus + node-exporter│
 │                                                   │  │  + kube-state-metrics     │
 │ Secrets: app-secrets, admin-basic-auth, …         │  │ Loki + Promtail           │
@@ -111,7 +110,7 @@ and image tags.
 
 | Var                | Meaning                                        |
 |--------------------|------------------------------------------------|
-| `DOMAIN`           | photo-book host (`/db` → adminer)              |
+| `DOMAIN`           | photo-book host                                |
 | `PLAY_DOMAIN`      | mine-sim host                                  |
 | `APP_DOMAIN`       | small-apps host (`/getaround`)                 |
 | `GETAROUND_IMAGE`  | getaround-scraper image (private Docker Hub)   |
@@ -143,7 +142,6 @@ Routes:
 | Route                                  | Backend           | Middlewares                    |
 |----------------------------------------|-------------------|--------------------------------|
 | `Host(book) `                          | photo-book:3000   | hsts                           |
-| `Host(book) && /db`                    | adminer:8080      | hsts                           |
 | `Host(play)`                           | mine-sim:3200     | hsts                           |
 | `Host(app) && PathPrefix(/getaround)`  | getaround:3300    | hsts, getaround-slash, getaround-auth, getaround-strip |
 | `Host(admin) && /portainer`            | portainer:9000    | admin-auth, **stripPrefix**, hsts |
@@ -281,7 +279,6 @@ infra-26/
     │                             #   cross-namespace, JSON access logs + Upgrade header
     ├── 15-middlewares.yaml       # HSTS middleware
     ├── 30-postgres.yaml          # Deployment + PVC + Service
-    ├── 35-adminer.yaml           # Deployment + Service
     ├── 40-photo-book.yaml        # Deployment + 3 PVCs + Service
     ├── 50-mine-sim.yaml          # Deployment (static, x2) + Service
     ├── 55-getaround.yaml         # Deployment + PVC + Service (private image)

@@ -21,26 +21,6 @@ spec:
   tls:
     certResolver: letsencrypt
 ---
-# adminer — book.holtz.fr/db  (higher priority than the catch-all above)
-apiVersion: traefik.io/v1alpha1
-kind: IngressRoute
-metadata:
-  name: adminer
-  namespace: web
-spec:
-  entryPoints: [websecure]
-  routes:
-    - match: Host(`${DOMAIN}`) && PathPrefix(`/db`)
-      kind: Rule
-      priority: 100
-      services:
-        - name: adminer
-          port: 8080
-      middlewares:
-        - name: hsts
-  tls:
-    certResolver: letsencrypt
----
 # getaround — app.holtz.fr/getaround  (slash redirect + prefix strip, see
 # 15-middlewares.yaml; the app serves from / inside the pod)
 apiVersion: traefik.io/v1alpha1

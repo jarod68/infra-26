@@ -30,7 +30,7 @@ update:
 	$(KUBECTL) -n web rollout status  deploy/getaround
 
 restart:
-	$(KUBECTL) -n web rollout restart deploy/photo-book deploy/mine-sim deploy/getaround deploy/adminer deploy/postgres
+	$(KUBECTL) -n web rollout restart deploy/photo-book deploy/mine-sim deploy/getaround deploy/postgres
 
 status:
 	@$(KUBECTL) -n web get pods,svc,ingressroute

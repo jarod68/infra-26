@@ -190,6 +190,12 @@ done
 info "Applying application + monitoring manifests …"
 $KUBECTL apply -f "$RENDER"
 
+# ── Decommission resources removed from the manifests ─────────────────────────
+# `kubectl apply` never prunes, so anything we drop from manifests/ keeps running
+# until deleted explicitly. Keep this idempotent (‑‑ignore-not-found).
+info "Pruning decommissioned resources …"
+$KUBECTL -n web delete deploy/adminer svc/adminer ingressroute/adminer --ignore-not-found
+
 ok "Deployed. Pods are starting:"
 $KUBECTL -n web get pods
 echo

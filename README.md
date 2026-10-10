@@ -9,6 +9,7 @@ freshly provisioned VPS with one command.
 | photo-book    | `https://book.holtz.fr`          | `web`       |
 | mine-sim      | `https://play.holtz.fr`          | `web`       |
 | getaround     | `https://app.holtz.fr/getaround` | `web`       |
+| site-gen      | `https://app.holtz.fr/site-gen`  | `web`       |
 | Portainer     | `https://admin.holtz.fr/portainer` | `web`     |
 | Grafana       | `https://admin.holtz.fr/grafana` | `monitoring`|
 | Dependency-Track | `https://dtrack.holtz.fr`     | `web`       |
@@ -114,6 +115,8 @@ and image tags.
 | `PLAY_DOMAIN`      | mine-sim host                                  |
 | `APP_DOMAIN`       | small-apps host (`/getaround`)                 |
 | `GETAROUND_IMAGE`  | getaround-scraper image (private Docker Hub)   |
+| `SITEGEN_IMAGE`    | site-gen image (default `jarod68/site-gen:latest`) |
+| `GOOGLE_MAPS_API_KEY` | optional — site-gen Google Places source    |
 | `DOCKERHUB_USER` / `DOCKERHUB_TOKEN` | pull credentials for the private image (read-only token) |
 | `ADMIN_DOMAIN`     | admin surface (`/portainer`, `/grafana`)       |
 | `DTRACK_DOMAIN`    | Dependency-Track host (SBOM analysis)          |
@@ -144,6 +147,7 @@ Routes:
 | `Host(book) `                          | photo-book:3000   | hsts                           |
 | `Host(play)`                           | mine-sim:3200     | hsts                           |
 | `Host(app) && PathPrefix(/getaround)`  | getaround:3300    | hsts, getaround-slash, getaround-auth, getaround-strip |
+| `Host(app) && PathPrefix(/site-gen)`   | site-gen:3400     | hsts, site-gen-slash, site-gen-auth, site-gen-strip |
 | `Host(admin) && /portainer`            | portainer:9000    | admin-auth, **stripPrefix**, hsts |
 | `Host(admin) && /grafana`              | grafana:80 (xns)  | admin-auth, hsts               |
 | `Host(admin) && /`                     | → redirect `/grafana` | admin-auth                 |
@@ -235,6 +239,7 @@ issued. Dual-stack makes Traefik answer the challenge on both families.
 | `photo-book-previews`  | Preview thumbnails (cache)                |
 | `photo-book-medium`    | Medium images (cache)                     |
 | `getaround-data`       | getaround SQLite DB (zones, relevés)      |
+| `site-gen-data`        | site-gen SQLite DB (scans, commerces)     |
 | `dtrack-postgres-data` | Dependency-Track PostgreSQL database      |
 | `dtrack-apiserver-data`| DT NVD mirror + Lucene indexes (`/data`)  |
 | `portainer-data`       | Portainer database                        |
@@ -282,6 +287,7 @@ infra-26/
     ├── 40-photo-book.yaml        # Deployment + 3 PVCs + Service
     ├── 50-mine-sim.yaml          # Deployment (static, x2) + Service
     ├── 55-getaround.yaml         # Deployment + PVC + Service (private image)
+    ├── 56-site-gen.yaml          # Deployment + PVC + Service (SQLite, Google key secret)
     ├── 60-ingressroutes.yaml     # book / book/db / play routes
     ├── 70-portainer.yaml         # Portainer (--base-url) + SA/ClusterRoleBinding + PVC
     ├── 80-monitoring.yaml        # HelmCharts: kube-prometheus-stack, loki-stack

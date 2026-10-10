@@ -44,6 +44,28 @@ spec:
   tls:
     certResolver: letsencrypt
 ---
+# site-gen — app.holtz.fr/site-gen  (same prefix scheme as getaround)
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: site-gen
+  namespace: web
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: Host(`${APP_DOMAIN}`) && PathPrefix(`/site-gen`)
+      kind: Rule
+      services:
+        - name: site-gen
+          port: 3400
+      middlewares:
+        - name: hsts
+        - name: site-gen-slash
+        - name: site-gen-auth
+        - name: site-gen-strip
+  tls:
+    certResolver: letsencrypt
+---
 # mine-sim — play.holtz.fr  (full-local build: plain static files, no WebSocket)
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute

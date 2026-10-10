@@ -26,7 +26,8 @@ set -a; . ./.env; set +a
 : "${PHOTO_IMAGE:?PHOTO_IMAGE missing in .env}"
 : "${MINESIM_IMAGE:?MINESIM_IMAGE missing in .env}"
 : "${GETAROUND_IMAGE:?GETAROUND_IMAGE missing in .env}"
-export DOMAIN PLAY_DOMAIN APP_DOMAIN ADMIN_DOMAIN DTRACK_DOMAIN ACME_EMAIL PHOTO_IMAGE MINESIM_IMAGE GETAROUND_IMAGE
+: "${SITEGEN_IMAGE:=jarod68/site-gen:latest}"
+export DOMAIN PLAY_DOMAIN APP_DOMAIN ADMIN_DOMAIN DTRACK_DOMAIN ACME_EMAIL PHOTO_IMAGE MINESIM_IMAGE GETAROUND_IMAGE SITEGEN_IMAGE
 
 # ── kubectl (prefer a real kubectl, fall back to `k3s kubectl`) ───────────────
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
@@ -129,6 +130,37 @@ ensure_getaround_auth() {
 ensure_getaround_auth
 ok "Secrets getaround-basic-auth{,-plain} ready."
 
+# ── site-gen basic-auth (guards app.holtz.fr/site-gen) + Google API key ──────
+ensure_sitegen_auth() {
+  if $KUBECTL -n web get secret site-gen-basic-auth-plain >/dev/null 2>&1; then
+    info "Reusing existing site-gen basic-auth password."
+    return
+  fi
+  local pw hash
+  pw="$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 32)"
+  hash="$(openssl passwd -apr1 "$pw")"
+  $KUBECTL -n web create secret generic site-gen-basic-auth \
+    --from-literal=users="admin:${hash}" \
+    --dry-run=client -o yaml | $KUBECTL apply -f -
+  $KUBECTL -n web create secret generic site-gen-basic-auth-plain \
+    --from-literal=plaintext="$pw" \
+    --dry-run=client -o yaml | $KUBECTL apply -f -
+  info "Generated a new site-gen basic-auth password (see: make password)."
+}
+ensure_sitegen_auth
+ok "Secrets site-gen-basic-auth{,-plain} ready."
+
+# GOOGLE_MAPS_API_KEY (optional) → site-gen-secrets. Left blank, an existing
+# secret is kept; with none at all site-gen only offers the OpenStreetMap source.
+if [[ -n "${GOOGLE_MAPS_API_KEY:-}" ]]; then
+  $KUBECTL -n web create secret generic site-gen-secrets \
+    --from-literal=GOOGLE_MAPS_API_KEY="$GOOGLE_MAPS_API_KEY" \
+    --dry-run=client -o yaml | $KUBECTL apply -f -
+  ok "Secret site-gen-secrets ready (Google Places key)."
+else
+  warn "GOOGLE_MAPS_API_KEY not set: site-gen keeps its existing key, or runs OpenStreetMap-only."
+fi
+
 # ── Monitoring namespace + Grafana admin password ─────────────────────────────
 # The kube-prometheus-stack HelmChart also creates this namespace, but we need it
 # now so the Grafana admin Secret exists before Grafana's pod starts.
@@ -172,13 +204,14 @@ for crd in ingressroutes.traefik.io middlewares.traefik.io; do
 done
 
 # ── Render + apply the rest (substituting only our known vars) ────────────────
-VARS='$DOMAIN $PLAY_DOMAIN $APP_DOMAIN $ADMIN_DOMAIN $DTRACK_DOMAIN $ACME_EMAIL $PHOTO_IMAGE $MINESIM_IMAGE $GETAROUND_IMAGE'
+VARS='$DOMAIN $PLAY_DOMAIN $APP_DOMAIN $ADMIN_DOMAIN $DTRACK_DOMAIN $ACME_EMAIL $PHOTO_IMAGE $MINESIM_IMAGE $GETAROUND_IMAGE $SITEGEN_IMAGE'
 RENDER="$(mktemp -d)"; trap 'rm -rf "$RENDER"' EXIT
 for f in manifests/15-middlewares.yaml \
          manifests/30-postgres.yaml \
          manifests/40-photo-book.yaml \
          manifests/50-mine-sim.yaml \
          manifests/55-getaround.yaml \
+         manifests/56-site-gen.yaml \
          manifests/60-ingressroutes.yaml \
          manifests/70-portainer.yaml \
          manifests/80-monitoring.yaml \
@@ -202,6 +235,7 @@ echo
 echo -e "  photo-book : ${GREEN}https://${DOMAIN}${RESET}"
 echo -e "  mine-sim   : ${GREEN}https://${PLAY_DOMAIN}${RESET}"
 echo -e "  getaround  : ${GREEN}https://${APP_DOMAIN}/getaround${RESET}"
+echo -e "  site-gen   : ${GREEN}https://${APP_DOMAIN}/site-gen${RESET}"
 echo -e "  portainer  : ${GREEN}https://${ADMIN_DOMAIN}/portainer${RESET}"
 echo -e "  grafana    : ${GREEN}https://${ADMIN_DOMAIN}/grafana${RESET}"
 echo -e "  dep-track  : ${GREEN}https://${DTRACK_DOMAIN}${RESET}  (UI behind admin basic-auth; first login admin/admin)"

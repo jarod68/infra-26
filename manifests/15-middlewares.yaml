@@ -47,3 +47,36 @@ spec:
     secret: getaround-basic-auth
     realm: "getaround"
     removeHeader: true
+---
+# site-gen lives under app.holtz.fr/site-gen — same slash-redirect + strip
+# scheme as getaround, and its own basic-auth (secrets site-gen-basic-auth{,-plain}).
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: site-gen-slash
+  namespace: web
+spec:
+  redirectRegex:
+    regex: "^https://([^/]+)/site-gen$"
+    replacement: "https://${1}/site-gen/"
+    permanent: true
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: site-gen-strip
+  namespace: web
+spec:
+  stripPrefix:
+    prefixes: ["/site-gen"]
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: site-gen-auth
+  namespace: web
+spec:
+  basicAuth:
+    secret: site-gen-basic-auth
+    realm: "site-gen"
+    removeHeader: true

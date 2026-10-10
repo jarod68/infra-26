@@ -34,6 +34,11 @@ spec:
             - { name: PORT, value: "3400" }
             - { name: DATA_DIR, value: /data }
             - { name: TZ, value: Europe/Paris }
+            # Headless-Chromium Google Maps source: OFF here — this node has no RAM
+            # to spare (Dependency-Track alone holds ~3.4 GB); with Chromium on top
+            # the load hit 20+ and scans stalled. Run browser scans from a machine
+            # with free memory, or free RAM here first, then set it back to "on".
+            - { name: BROWSER_SCRAPER, value: "off" }
             # Google Places API key (site-gen-secrets, from GOOGLE_MAPS_API_KEY in
             # .env). Optional: without it only the OpenStreetMap source is offered.
             - name: GOOGLE_MAPS_API_KEY

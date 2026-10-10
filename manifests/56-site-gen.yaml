@@ -47,8 +47,11 @@ spec:
             tcpSocket: { port: 3400 }
             initialDelaySeconds: 5
             periodSeconds: 10
+          # Headless Chromium (Google Maps browser source) runs during scans:
+          # ~300-500 MB; the limit keeps a runaway browser from starving the node.
           resources:
-            requests: { cpu: 25m, memory: 64Mi }
+            requests: { cpu: 50m, memory: 256Mi }
+            limits: { memory: 1536Mi }
       volumes:
         - name: data
           persistentVolumeClaim: { claimName: site-gen-data }

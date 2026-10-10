@@ -294,7 +294,7 @@ infra-26/
     │                             #   + Loki datasource ConfigMap
     ├── 81-grafana-dashboards.yaml# 2 provisioned dashboards (ConfigMap)
     ├── 85-admin-ingress.yaml     # admin.holtz.fr: auth + /portainer + /grafana + redirect
-    └── 90-dependency-track.yaml  # dtrack.holtz.fr: apiserver + frontend + dedicated postgres
+    └── 90-dependency-track.yaml  # dtrack.holtz.fr — DISABLED (not applied by deploy.sh)
 ```
 
 ---
@@ -323,6 +323,12 @@ infra-26/
 ---
 
 ## 11. Dependency-Track & SBOM ingestion
+
+> **Disabled since 2026-10-10** — removed from the cluster to free ~3.5 GB of RAM
+> (site-gen's headless Chromium needs it). `deploy.sh` no longer applies
+> `90-dependency-track.yaml` and prunes its leftovers; the PVCs
+> `dtrack-{apiserver,postgres}-data` are kept. To restore it, add the manifest
+> back to the apply list in `deploy.sh` and drop it from the prune step.
 
 [Dependency-Track](https://dependencytrack.org/) provides continuous SCA: it
 stores an SBOM per project/version and re-analyses it against the NVD / OSV /

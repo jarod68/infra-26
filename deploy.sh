@@ -216,8 +216,10 @@ for f in manifests/15-middlewares.yaml \
          manifests/70-portainer.yaml \
          manifests/80-monitoring.yaml \
          manifests/81-grafana-dashboards.yaml \
-         manifests/85-admin-ingress.yaml \
-         manifests/90-dependency-track.yaml; do
+         manifests/85-admin-ingress.yaml; do
+  # manifests/90-dependency-track.yaml is DISABLED (removed 2026-10-10 to free
+  # ~3.5 GB of RAM). Its PVCs dtrack-{apiserver,postgres}-data are kept; add the
+  # file back here (and drop it from the prune below) to restore it.
   envsubst "$VARS" < "$f" > "$RENDER/$(basename "$f")"
 done
 info "Applying application + monitoring manifests …"
@@ -228,6 +230,8 @@ $KUBECTL apply -f "$RENDER"
 # until deleted explicitly. Keep this idempotent (‑‑ignore-not-found).
 info "Pruning decommissioned resources …"
 $KUBECTL -n web delete deploy/adminer svc/adminer ingressroute/adminer --ignore-not-found
+$KUBECTL -n web delete deploy/dtrack-apiserver deploy/dtrack-frontend deploy/dtrack-postgres \
+  svc/dtrack-apiserver svc/dtrack-frontend svc/dtrack-postgres ingressroute/dtrack --ignore-not-found
 
 ok "Deployed. Pods are starting:"
 $KUBECTL -n web get pods
@@ -238,8 +242,6 @@ echo -e "  getaround  : ${GREEN}https://${APP_DOMAIN}/getaround${RESET}"
 echo -e "  site-gen   : ${GREEN}https://${APP_DOMAIN}/site-gen${RESET}"
 echo -e "  portainer  : ${GREEN}https://${ADMIN_DOMAIN}/portainer${RESET}"
 echo -e "  grafana    : ${GREEN}https://${ADMIN_DOMAIN}/grafana${RESET}"
-echo -e "  dep-track  : ${GREEN}https://${DTRACK_DOMAIN}${RESET}  (UI behind admin basic-auth; first login admin/admin)"
 echo
 warn "DNS A+AAAA for ${DOMAIN}, ${PLAY_DOMAIN}, ${APP_DOMAIN}, ${ADMIN_DOMAIN} and ${DTRACK_DOMAIN} must point to this VPS. TLS is issued on first HTTPS hit (~30 s)."
-warn "Dependency-Track's apiserver is JVM-based (4 GB heap min — it refuses to start below) and takes a few minutes on first boot: kubectl -n web rollout status deploy/dtrack-apiserver"
 warn "Monitoring charts (kube-prometheus-stack, loki) install asynchronously — give them a few minutes: kubectl -n monitoring get pods"

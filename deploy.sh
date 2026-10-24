@@ -27,7 +27,9 @@ set -a; . ./.env; set +a
 : "${MINESIM_IMAGE:?MINESIM_IMAGE missing in .env}"
 : "${GETAROUND_IMAGE:?GETAROUND_IMAGE missing in .env}"
 : "${SITEGEN_IMAGE:=jarod68/site-gen:latest}"
-export DOMAIN PLAY_DOMAIN APP_DOMAIN ADMIN_DOMAIN DTRACK_DOMAIN ACME_EMAIL PHOTO_IMAGE MINESIM_IMAGE GETAROUND_IMAGE SITEGEN_IMAGE
+: "${PLAY_QA_DOMAIN:=qa.${PLAY_DOMAIN}}"
+: "${MINESIM_QA_IMAGE:=jarod68/mine-sim:qa}"
+export DOMAIN PLAY_DOMAIN PLAY_QA_DOMAIN APP_DOMAIN ADMIN_DOMAIN DTRACK_DOMAIN ACME_EMAIL PHOTO_IMAGE MINESIM_IMAGE MINESIM_QA_IMAGE GETAROUND_IMAGE SITEGEN_IMAGE
 
 # ── kubectl (prefer a real kubectl, fall back to `k3s kubectl`) ───────────────
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
@@ -204,9 +206,10 @@ for crd in ingressroutes.traefik.io middlewares.traefik.io; do
 done
 
 # ── Render + apply the rest (substituting only our known vars) ────────────────
-VARS='$DOMAIN $PLAY_DOMAIN $APP_DOMAIN $ADMIN_DOMAIN $DTRACK_DOMAIN $ACME_EMAIL $PHOTO_IMAGE $MINESIM_IMAGE $GETAROUND_IMAGE $SITEGEN_IMAGE'
+VARS='$DOMAIN $PLAY_DOMAIN $PLAY_QA_DOMAIN $APP_DOMAIN $ADMIN_DOMAIN $DTRACK_DOMAIN $ACME_EMAIL $PHOTO_IMAGE $MINESIM_IMAGE $MINESIM_QA_IMAGE $GETAROUND_IMAGE $SITEGEN_IMAGE'
 RENDER="$(mktemp -d)"; trap 'rm -rf "$RENDER"' EXIT
 for f in manifests/15-middlewares.yaml \
+         manifests/20-keel.yaml \
          manifests/30-postgres.yaml \
          manifests/40-photo-book.yaml \
          manifests/50-mine-sim.yaml \
@@ -237,11 +240,11 @@ ok "Deployed. Pods are starting:"
 $KUBECTL -n web get pods
 echo
 echo -e "  photo-book : ${GREEN}https://${DOMAIN}${RESET}"
-echo -e "  mine-sim   : ${GREEN}https://${PLAY_DOMAIN}${RESET}"
+echo -e "  mine-sim   : ${GREEN}https://${PLAY_DOMAIN}${RESET}  (QA: https://${PLAY_QA_DOMAIN})"
 echo -e "  getaround  : ${GREEN}https://${APP_DOMAIN}/getaround${RESET}"
 echo -e "  site-gen   : ${GREEN}https://${APP_DOMAIN}/site-gen${RESET}"
 echo -e "  portainer  : ${GREEN}https://${ADMIN_DOMAIN}/portainer${RESET}"
 echo -e "  grafana    : ${GREEN}https://${ADMIN_DOMAIN}/grafana${RESET}"
 echo
-warn "DNS A+AAAA for ${DOMAIN}, ${PLAY_DOMAIN}, ${APP_DOMAIN}, ${ADMIN_DOMAIN} and ${DTRACK_DOMAIN} must point to this VPS. TLS is issued on first HTTPS hit (~30 s)."
+warn "DNS A+AAAA for ${DOMAIN}, ${PLAY_DOMAIN}, ${PLAY_QA_DOMAIN}, ${APP_DOMAIN}, ${ADMIN_DOMAIN} and ${DTRACK_DOMAIN} must point to this VPS. TLS is issued on first HTTPS hit (~30 s)."
 warn "Monitoring charts (kube-prometheus-stack, loki) install asynchronously — give them a few minutes: kubectl -n monitoring get pods"

@@ -8,6 +8,7 @@ freshly provisioned VPS with one command.
 |---------------|----------------------------------|-------------|
 | photo-book    | `https://book.holtz.fr`          | `web`       |
 | mine-sim      | `https://play.holtz.fr`          | `web`       |
+| mine-sim QA   | `https://qa.play.holtz.fr`       | `web`       |
 | getaround     | `https://app.holtz.fr/getaround` | `web`       |
 | site-gen      | `https://app.holtz.fr/site-gen`  | `web`       |
 | Portainer     | `https://admin.holtz.fr/portainer` | `web`     |
@@ -59,7 +60,7 @@ Encrypt TLS**. The whole thing runs on one node.
 
 ## 2. Quick start (fresh VPS)
 
-Point DNS first: **`book.holtz.fr`, `play.holtz.fr`, `app.holtz.fr`, `admin.holtz.fr`
+Point DNS first: **`book.holtz.fr`, `play.holtz.fr`, `qa.play.holtz.fr`, `app.holtz.fr`, `admin.holtz.fr`
 and `dtrack.holtz.fr`** → the VPS public IP, with **both `A` and `AAAA`** records
 (the `AAAA` matters, see §6). Then, as root:
 
@@ -113,6 +114,7 @@ and image tags.
 |--------------------|------------------------------------------------|
 | `DOMAIN`           | photo-book host                                |
 | `PLAY_DOMAIN`      | mine-sim host                                  |
+| `PLAY_QA_DOMAIN`   | mine-sim QA host (default `qa.$PLAY_DOMAIN`)   |
 | `APP_DOMAIN`       | small-apps host (`/getaround`)                 |
 | `GETAROUND_IMAGE`  | getaround-scraper image (private Docker Hub)   |
 | `SITEGEN_IMAGE`    | site-gen image (default `jarod68/site-gen:latest`) |
@@ -122,6 +124,7 @@ and image tags.
 | `DTRACK_DOMAIN`    | Dependency-Track host (SBOM analysis)          |
 | `ACME_EMAIL`       | Let's Encrypt account e-mail                   |
 | `PHOTO_IMAGE` / `MINESIM_IMAGE` | app image tags                    |
+| `MINESIM_QA_IMAGE` | mine-sim QA image (default `jarod68/mine-sim:qa`) |
 | `VAPID_*`          | optional Web-Push keys for photo-book          |
 
 ---
@@ -146,6 +149,7 @@ Routes:
 |----------------------------------------|-------------------|--------------------------------|
 | `Host(book) `                          | photo-book:3000   | hsts                           |
 | `Host(play)`                           | mine-sim:3200     | hsts                           |
+| `Host(qa.play)`                        | mine-sim-qa:3200  | hsts                           |
 | `Host(app) && PathPrefix(/getaround)`  | getaround:3300    | hsts, getaround-slash, getaround-auth, getaround-strip |
 | `Host(app) && PathPrefix(/site-gen)`   | site-gen:3400     | hsts, site-gen-slash, site-gen-auth, site-gen-strip |
 | `Host(admin) && /portainer`            | portainer:9000    | admin-auth, **stripPrefix**, hsts |
@@ -257,7 +261,30 @@ kubectl -n <ns> get pvc <name> -o jsonpath='{.spec.volumeName}' \
 
 ---
 
-## 8. Day-to-day
+## 8. mine-sim release flow (QA → prod)
+
+```
+push main ─► mine-sim CI: test + Grype gate ─► jarod68/mine-sim:sha-<commit> + :qa
+                                                   │ Keel (poll, ~2 min)
+                                                   ▼
+                                     mine-sim-qa  https://qa.play.holtz.fr
+"Promote to prod" (GitHub Actions, manual approval) ─► :latest = :sha-<commit>
+                                                   │ Keel (poll, ~2 min)
+                                                   ▼
+                                     mine-sim     https://play.holtz.fr
+```
+
+- **Keel** (`20-keel.yaml`, namespace `keel`) polls Docker Hub every 2 min for
+  Deployments annotated `keel.sh/policy: force` + `keel.sh/match-tag: "true"`,
+  and rolls them when the digest behind their tag changes. No UI, no webhook,
+  nothing exposed. Digest checks are manifest `HEAD` requests, which don't count
+  against Docker Hub's pull rate limit.
+- **Promote / roll back** from the mine-sim repo: *Actions → Promote to prod →
+  Run workflow*, with the commit shown in the QA build (default: whatever `:qa`
+  is now) or any older `sha-…` to roll back. The image is re-tagged, never rebuilt.
+- `kubectl -n keel logs deploy/keel` shows every check and roll.
+
+## 9. Day-to-day
 
 ```bash
 make status        # web: pods / svc / ingressroutes / pvc
@@ -270,7 +297,7 @@ make logs-photo    # also: logs-mine, logs-db, logs-traefik, logs-grafana, logs-
 
 ---
 
-## 9. Layout
+## 10. Layout
 
 ```
 infra-26/
@@ -283,9 +310,10 @@ infra-26/
     ├── 10-traefik-acme.yaml      # HelmChartConfig: LE, redirect, dual-stack svc,
     │                             #   cross-namespace, JSON access logs + Upgrade header
     ├── 15-middlewares.yaml       # HSTS middleware
+    ├── 20-keel.yaml              # Keel: rolls annotated Deployments when their tag moves
     ├── 30-postgres.yaml          # Deployment + PVC + Service
     ├── 40-photo-book.yaml        # Deployment + 3 PVCs + Service
-    ├── 50-mine-sim.yaml          # Deployment (static, x2) + Service
+    ├── 50-mine-sim.yaml          # prod (static, x2, :latest) + QA (x1, :qa), Keel-annotated
     ├── 55-getaround.yaml         # Deployment + PVC + Service (private image)
     ├── 56-site-gen.yaml          # Deployment + PVC + Service (SQLite, Google key secret)
     ├── 60-ingressroutes.yaml     # book / book/db / play routes
@@ -299,7 +327,7 @@ infra-26/
 
 ---
 
-## 10. Gotchas we hit (so you don't)
+## 11. Gotchas we hit (so you don't)
 
 - **No cert issued** → check `kubectl -n kube-system logs deploy/traefik | grep -i acme`.
   If it validates over an IPv6 address and 404s, the cluster is single-stack:
@@ -322,7 +350,7 @@ infra-26/
 
 ---
 
-## 11. Dependency-Track & SBOM ingestion
+## 12. Dependency-Track & SBOM ingestion
 
 > **Disabled since 2026-10-10** — removed from the cluster to free ~3.5 GB of RAM
 > (site-gen's headless Chromium needs it). `deploy.sh` no longer applies

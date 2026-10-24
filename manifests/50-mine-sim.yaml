@@ -2,11 +2,21 @@
 # IndexedDB); the container is just a zero-dependency static file server. That
 # makes it fully stateless: no DB, no WebSocket, no game rooms — so it scales
 # horizontally and rolls without downtime.
+#
+# Two environments, same image, different tags — Keel (20-keel.yaml) rolls each
+# Deployment when its tag moves on Docker Hub:
+#   mine-sim-qa  ← jarod68/mine-sim:qa      every green CI run on main
+#   mine-sim     ← jarod68/mine-sim:latest  "Promote to prod" workflow (manual approval)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mine-sim
   namespace: web
+  annotations:
+    keel.sh/policy: force          # same tag, new digest → roll
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 2m"
 spec:
   replicas: 2            # stateless static server ⇒ free to run multiple pods
   strategy:
@@ -46,6 +56,60 @@ metadata:
   namespace: web
 spec:
   selector: { app: mine-sim }
+  ports:
+    - port: 3200
+      targetPort: 3200
+---
+# QA: one pod, same container spec, fed by the :qa tag.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mine-sim-qa
+  namespace: web
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 2m"
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels: { app: mine-sim-qa }
+  template:
+    metadata:
+      labels: { app: mine-sim-qa }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: mine-sim
+          image: ${MINESIM_QA_IMAGE}
+          imagePullPolicy: Always
+          env:
+            - { name: NODE_ENV, value: production }
+            - { name: PORT, value: "3200" }
+          ports:
+            - containerPort: 3200
+          readinessProbe:
+            httpGet: { path: /, port: 3200 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 25m, memory: 48Mi }
+            limits: { memory: 96Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mine-sim-qa
+  namespace: web
+spec:
+  selector: { app: mine-sim-qa }
   ports:
     - port: 3200
       targetPort: 3200

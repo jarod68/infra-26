@@ -28,8 +28,10 @@ set -a; . ./.env; set +a
 : "${GETAROUND_IMAGE:?GETAROUND_IMAGE missing in .env}"
 : "${SITEGEN_IMAGE:=jarod68/site-gen:latest}"
 : "${PLAY_QA_DOMAIN:=qa.${PLAY_DOMAIN}}"
+: "${DOMAIN_QA:=qa.${DOMAIN}}"
+: "${PHOTO_QA_IMAGE:=jarod68/photo-book:qa}"
 : "${MINESIM_QA_IMAGE:=jarod68/mine-sim:qa}"
-export DOMAIN PLAY_DOMAIN PLAY_QA_DOMAIN APP_DOMAIN ADMIN_DOMAIN DTRACK_DOMAIN ACME_EMAIL PHOTO_IMAGE MINESIM_IMAGE MINESIM_QA_IMAGE GETAROUND_IMAGE SITEGEN_IMAGE
+export DOMAIN DOMAIN_QA PLAY_DOMAIN PLAY_QA_DOMAIN APP_DOMAIN ADMIN_DOMAIN DTRACK_DOMAIN ACME_EMAIL PHOTO_IMAGE PHOTO_QA_IMAGE MINESIM_IMAGE MINESIM_QA_IMAGE GETAROUND_IMAGE SITEGEN_IMAGE
 
 # ── kubectl (prefer a real kubectl, fall back to `k3s kubectl`) ───────────────
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
@@ -53,12 +55,14 @@ read_secret_key() { $KUBECTL -n web get secret app-secrets -o "jsonpath={.data.$
 ensure_secret() {
   # Reuse existing passwords so a redeploy never rotates a live DB credential;
   # generate any that are still missing.
-  local pw dtpw
+  local pw qapw dtpw
   pw="$(read_secret_key POSTGRES_PASSWORD)"
+  qapw="$(read_secret_key POSTGRES_QA_PASSWORD)"
   dtpw="$(read_secret_key DTRACK_DB_PASSWORD)"
   [[ -n "$pw"   ]] && info "Reusing existing Postgres password."               || { pw="$(gen_pw)";   info "Generated a new Postgres password."; }
+  [[ -n "$qapw" ]] && info "Reusing existing Postgres QA password."            || { qapw="$(gen_pw)"; info "Generated a new Postgres QA password."; }
   [[ -n "$dtpw" ]] && info "Reusing existing Dependency-Track DB password."     || { dtpw="$(gen_pw)"; info "Generated a new Dependency-Track DB password."; }
-  local args=(--from-literal=POSTGRES_PASSWORD="$pw" --from-literal=DTRACK_DB_PASSWORD="$dtpw")
+  local args=(--from-literal=POSTGRES_PASSWORD="$pw" --from-literal=POSTGRES_QA_PASSWORD="$qapw" --from-literal=DTRACK_DB_PASSWORD="$dtpw")
   [[ -n "${VAPID_PUBLIC_KEY:-}"  ]] && args+=(--from-literal=VAPID_PUBLIC_KEY="$VAPID_PUBLIC_KEY")
   [[ -n "${VAPID_PRIVATE_KEY:-}" ]] && args+=(--from-literal=VAPID_PRIVATE_KEY="$VAPID_PRIVATE_KEY")
   [[ -n "${VAPID_SUBJECT:-}"     ]] && args+=(--from-literal=VAPID_SUBJECT="$VAPID_SUBJECT")
@@ -206,7 +210,7 @@ for crd in ingressroutes.traefik.io middlewares.traefik.io; do
 done
 
 # ── Render + apply the rest (substituting only our known vars) ────────────────
-VARS='$DOMAIN $PLAY_DOMAIN $PLAY_QA_DOMAIN $APP_DOMAIN $ADMIN_DOMAIN $DTRACK_DOMAIN $ACME_EMAIL $PHOTO_IMAGE $MINESIM_IMAGE $MINESIM_QA_IMAGE $GETAROUND_IMAGE $SITEGEN_IMAGE'
+VARS='$DOMAIN $DOMAIN_QA $PLAY_DOMAIN $PLAY_QA_DOMAIN $APP_DOMAIN $ADMIN_DOMAIN $DTRACK_DOMAIN $ACME_EMAIL $PHOTO_IMAGE $PHOTO_QA_IMAGE $MINESIM_IMAGE $MINESIM_QA_IMAGE $GETAROUND_IMAGE $SITEGEN_IMAGE'
 RENDER="$(mktemp -d)"; trap 'rm -rf "$RENDER"' EXIT
 for f in manifests/15-middlewares.yaml \
          manifests/20-keel.yaml \
@@ -228,6 +232,28 @@ done
 info "Applying application + monitoring manifests …"
 $KUBECTL apply -f "$RENDER"
 
+# ── photo-book QA database ────────────────────────────────────────────────────
+# Its own role + database in the shared PostgreSQL (idempotent). The QA role
+# can't connect to the production database: CONNECT on both databases is
+# revoked from PUBLIC and granted only to each owner. The password goes through
+# stdin, never a command line.
+info "Ensuring the photo-book QA database …"
+$KUBECTL -n web rollout status deploy/postgres --timeout=180s >/dev/null
+{
+  printf '\\set qapw %s\n' "$(read_secret_key POSTGRES_QA_PASSWORD)"
+  cat <<'SQL'
+SELECT format('CREATE ROLE photobook_qa LOGIN PASSWORD %L', :'qapw')
+ WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'photobook_qa') \gexec
+SELECT format('ALTER ROLE photobook_qa PASSWORD %L', :'qapw') \gexec
+SELECT 'CREATE DATABASE photobook_qa OWNER photobook_qa'
+ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'photobook_qa') \gexec
+REVOKE CONNECT ON DATABASE photobook    FROM PUBLIC;
+REVOKE CONNECT ON DATABASE photobook_qa FROM PUBLIC;
+GRANT  CONNECT ON DATABASE photobook_qa TO photobook_qa;
+SQL
+} | $KUBECTL -n web exec -i deploy/postgres -- psql -q -v ON_ERROR_STOP=1 -U photobook -d photobook >/dev/null
+ok "photo-book QA database ready (photobook_qa)."
+
 # ── Decommission resources removed from the manifests ─────────────────────────
 # `kubectl apply` never prunes, so anything we drop from manifests/ keeps running
 # until deleted explicitly. Keep this idempotent (‑‑ignore-not-found).
@@ -239,12 +265,12 @@ $KUBECTL -n web delete deploy/dtrack-apiserver deploy/dtrack-frontend deploy/dtr
 ok "Deployed. Pods are starting:"
 $KUBECTL -n web get pods
 echo
-echo -e "  photo-book : ${GREEN}https://${DOMAIN}${RESET}"
+echo -e "  photo-book : ${GREEN}https://${DOMAIN}${RESET}  (QA: https://${DOMAIN_QA}, admin basic-auth)"
 echo -e "  mine-sim   : ${GREEN}https://${PLAY_DOMAIN}${RESET}  (QA: https://${PLAY_QA_DOMAIN})"
 echo -e "  getaround  : ${GREEN}https://${APP_DOMAIN}/getaround${RESET}"
 echo -e "  site-gen   : ${GREEN}https://${APP_DOMAIN}/site-gen${RESET}"
 echo -e "  portainer  : ${GREEN}https://${ADMIN_DOMAIN}/portainer${RESET}"
 echo -e "  grafana    : ${GREEN}https://${ADMIN_DOMAIN}/grafana${RESET}"
 echo
-warn "DNS A+AAAA for ${DOMAIN}, ${PLAY_DOMAIN}, ${PLAY_QA_DOMAIN}, ${APP_DOMAIN}, ${ADMIN_DOMAIN} and ${DTRACK_DOMAIN} must point to this VPS. TLS is issued on first HTTPS hit (~30 s)."
+warn "DNS A+AAAA for ${DOMAIN}, ${DOMAIN_QA}, ${PLAY_DOMAIN}, ${PLAY_QA_DOMAIN}, ${APP_DOMAIN}, ${ADMIN_DOMAIN} and ${DTRACK_DOMAIN} must point to this VPS. TLS is issued on first HTTPS hit (~30 s)."
 warn "Monitoring charts (kube-prometheus-stack, loki) install asynchronously — give them a few minutes: kubectl -n monitoring get pods"

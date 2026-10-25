@@ -19,13 +19,22 @@ spec:
   accessModes: [ReadWriteOnce]
   resources: { requests: { storage: 5Gi } }
 ---
+# Two environments, same image, different tags — Keel (20-keel.yaml) rolls each
+# Deployment when its tag moves on Docker Hub:
+#   photo-book-qa ← jarod68/photo-book:qa      every green CI run on main
+#   photo-book    ← jarod68/photo-book:latest  "Promote to prod" workflow (manual approval)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: photo-book
   namespace: web
+  annotations:
+    keel.sh/policy: force          # same tag, new digest → roll
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 2m"
 spec:
-  replicas: 1
+  replicas: 1               # single replica: keeps the shared VPS light
   strategy:
     type: Recreate          # RWO volumes — one writer at a time
   selector:
@@ -86,6 +95,95 @@ metadata:
   namespace: web
 spec:
   selector: { app: photo-book }
+  ports:
+    - port: 3000
+      targetPort: 3000
+---
+# ── QA ── (qa.book.holtz.fr) Same container, fed by the :qa tag, isolated data:
+#  - its own PostgreSQL database + role (photobook_qa, created by deploy.sh; the
+#    QA role cannot connect to the production database);
+#  - the PRODUCTION photos mounted READ-ONLY (real content to test against, but
+#    QA can't upload, delete or modify anything);
+#  - its own preview / medium caches; no production Web Push keys (QA generates
+#    its own and only ever notifies its own subscribers, never the real ones).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: photo-book-qa-previews, namespace: web }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 5Gi } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: photo-book-qa-medium, namespace: web }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 5Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: photo-book-qa
+  namespace: web
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 2m"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app: photo-book-qa }
+  template:
+    metadata:
+      labels: { app: photo-book-qa }
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: photo-book
+          image: ${PHOTO_QA_IMAGE}
+          imagePullPolicy: Always
+          env:
+            - { name: NODE_ENV, value: production }
+            - { name: PORT, value: "3000" }
+            - { name: POSTGRES_HOST, value: postgres }
+            - { name: POSTGRES_DB, value: photobook_qa }
+            - { name: POSTGRES_USER, value: photobook_qa }
+            - { name: PHOTOS_DIR, value: /app/photos }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: app-secrets, key: POSTGRES_QA_PASSWORD }
+          ports:
+            - containerPort: 3000
+          volumeMounts:
+            - { name: photos, mountPath: /app/photos, readOnly: true }
+            - { name: previews, mountPath: /app/public/previews }
+            - { name: medium, mountPath: /app/public/medium }
+          readinessProbe:
+            tcpSocket: { port: 3000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 768Mi }   # preview generation (sharp) is the peak
+      volumes:
+        - name: photos
+          persistentVolumeClaim: { claimName: photo-book-photos, readOnly: true }
+        - { name: previews, persistentVolumeClaim: { claimName: photo-book-qa-previews } }
+        - { name: medium, persistentVolumeClaim: { claimName: photo-book-qa-medium } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: photo-book-qa
+  namespace: web
+spec:
+  selector: { app: photo-book-qa }
   ports:
     - port: 3000
       targetPort: 3000

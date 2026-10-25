@@ -7,6 +7,7 @@ freshly provisioned VPS with one command.
 | What          | URL                              | Namespace   |
 |---------------|----------------------------------|-------------|
 | photo-book    | `https://book.holtz.fr`          | `web`       |
+| photo-book QA | `https://qa.book.holtz.fr` (admin basic-auth) | `web` |
 | mine-sim      | `https://play.holtz.fr`          | `web`       |
 | mine-sim QA   | `https://qa.play.holtz.fr`       | `web`       |
 | getaround     | `https://app.holtz.fr/getaround` | `web`       |
@@ -60,7 +61,7 @@ Encrypt TLS**. The whole thing runs on one node.
 
 ## 2. Quick start (fresh VPS)
 
-Point DNS first: **`book.holtz.fr`, `play.holtz.fr`, `qa.play.holtz.fr`, `app.holtz.fr`, `admin.holtz.fr`
+Point DNS first: **`book.holtz.fr`, `qa.book.holtz.fr`, `play.holtz.fr`, `qa.play.holtz.fr`, `app.holtz.fr`, `admin.holtz.fr`
 and `dtrack.holtz.fr`** → the VPS public IP, with **both `A` and `AAAA`** records
 (the `AAAA` matters, see §6). Then, as root:
 
@@ -115,6 +116,7 @@ and image tags.
 | `DOMAIN`           | photo-book host                                |
 | `PLAY_DOMAIN`      | mine-sim host                                  |
 | `PLAY_QA_DOMAIN`   | mine-sim QA host (default `qa.$PLAY_DOMAIN`)   |
+| `DOMAIN_QA`        | photo-book QA host (default `qa.$DOMAIN`)      |
 | `APP_DOMAIN`       | small-apps host (`/getaround`)                 |
 | `GETAROUND_IMAGE`  | getaround-scraper image (private Docker Hub)   |
 | `SITEGEN_IMAGE`    | site-gen image (default `jarod68/site-gen:latest`) |
@@ -125,6 +127,7 @@ and image tags.
 | `ACME_EMAIL`       | Let's Encrypt account e-mail                   |
 | `PHOTO_IMAGE` / `MINESIM_IMAGE` | app image tags                    |
 | `MINESIM_QA_IMAGE` | mine-sim QA image (default `jarod68/mine-sim:qa`) |
+| `PHOTO_QA_IMAGE`   | photo-book QA image (default `jarod68/photo-book:qa`) |
 | `VAPID_*`          | optional Web-Push keys for photo-book          |
 
 ---
@@ -150,6 +153,7 @@ Routes:
 | `Host(book) `                          | photo-book:3000   | hsts                           |
 | `Host(play)`                           | mine-sim:3200     | hsts                           |
 | `Host(qa.play)`                        | mine-sim-qa:3200  | hsts                           |
+| `Host(qa.book)`                        | photo-book-qa:3000 | admin-auth, hsts              |
 | `Host(app) && PathPrefix(/getaround)`  | getaround:3300    | hsts, getaround-slash, getaround-auth, getaround-strip |
 | `Host(app) && PathPrefix(/site-gen)`   | site-gen:3400     | hsts, site-gen-slash, site-gen-auth, site-gen-strip |
 | `Host(admin) && /portainer`            | portainer:9000    | admin-auth, **stripPrefix**, hsts |
@@ -261,7 +265,7 @@ kubectl -n <ns> get pvc <name> -o jsonpath='{.spec.volumeName}' \
 
 ---
 
-## 8. mine-sim release flow (QA → prod)
+## 8. Release flow (QA → prod): mine-sim and photo-book
 
 ```
 push main ─► mine-sim CI: test + Grype gate ─► jarod68/mine-sim:sha-<commit> + :qa
@@ -283,6 +287,15 @@ push main ─► mine-sim CI: test + Grype gate ─► jarod68/mine-sim:sha-<com
   Run workflow*, with the commit shown in the QA build (default: whatever `:qa`
   is now) or any older `sha-…` to roll back. The image is re-tagged, never rebuilt.
 - `kubectl -n keel logs deploy/keel` shows every check and roll.
+- **photo-book** follows the same flow (`:qa` → `deploy/photo-book-qa` at
+  `qa.book.holtz.fr`, `:latest` → `deploy/photo-book`, one replica each). Its QA
+  is isolated from production data: its own PostgreSQL role + database
+  `photobook_qa` (created by `deploy.sh`; CONNECT on each database is revoked from
+  PUBLIC, so the QA role can't open the production one), the production photos
+  mounted **read-only**, its own preview caches and Web Push keys. The route is
+  behind `admin-auth`: in a fresh QA database every album defaults to *public*,
+  so albums that are private in prod would otherwise be readable there. The QA
+  admin password is printed once in `kubectl -n web logs deploy/photo-book-qa`.
 
 ## 9. Day-to-day
 
@@ -312,7 +325,7 @@ infra-26/
     ├── 15-middlewares.yaml       # HSTS middleware
     ├── 20-keel.yaml              # Keel: rolls annotated Deployments when their tag moves
     ├── 30-postgres.yaml          # Deployment + PVC + Service
-    ├── 40-photo-book.yaml        # Deployment + 3 PVCs + Service
+    ├── 40-photo-book.yaml        # prod (x1, :latest) + QA (x1, :qa, own DB, prod photos read-only), Keel-annotated
     ├── 50-mine-sim.yaml          # prod (static, x2, :latest) + QA (x1, :qa), Keel-annotated
     ├── 55-getaround.yaml         # Deployment + PVC + Service (private image)
     ├── 56-site-gen.yaml          # Deployment + PVC + Service (SQLite, Google key secret)

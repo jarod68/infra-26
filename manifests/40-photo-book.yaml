@@ -150,6 +150,7 @@ spec:
           imagePullPolicy: Always
           env:
             - { name: NODE_ENV, value: production }
+            - { name: APP_ENV, value: qa }   # "[QA]" title + hi-vis strip in the UI
             - { name: PORT, value: "3000" }
             - { name: POSTGRES_HOST, value: postgres }
             - { name: POSTGRES_DB, value: photobook_qa }

@@ -102,8 +102,12 @@ spec:
 # ── QA ── (qa.book.holtz.fr) Same container, fed by the :qa tag, isolated data:
 #  - its own PostgreSQL database + role (photobook_qa, created by deploy.sh; the
 #    QA role cannot connect to the production database);
-#  - the PRODUCTION photos mounted READ-ONLY (real content to test against, but
-#    QA can't upload, delete or modify anything);
+#  - a WRITABLE COPY of the production photos, made at every pod start by the
+#    copy-photos init container (the production volume is only ever mounted
+#    read-only here): QA can create albums, upload, rename and delete freely,
+#    and each deployment / restart starts again from the production photos —
+#    QA changes to the photo folder are thrown away. The copy keeps the files'
+#    dates, so the QA preview caches below stay valid;
 #  - its own preview / medium caches; no production Web Push keys (QA generates
 #    its own and only ever notifies its own subscribers, never the real ones).
 apiVersion: v1
@@ -144,6 +148,18 @@ spec:
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
+      initContainers:
+        # Fresh writable copy of the production photos (read-only source).
+        - name: copy-photos
+          image: ${PHOTO_QA_IMAGE}
+          imagePullPolicy: Always
+          command: ["sh", "-c", "cp -a /prod-photos/. /app/photos/ && echo \"QA photos: $(du -sh /app/photos | cut -f1) copied from production\""]
+          volumeMounts:
+            - { name: prod-photos, mountPath: /prod-photos, readOnly: true }
+            - { name: photos, mountPath: /app/photos }
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 128Mi }
       containers:
         - name: photo-book
           image: ${PHOTO_QA_IMAGE}
@@ -162,7 +178,7 @@ spec:
           ports:
             - containerPort: 3000
           volumeMounts:
-            - { name: photos, mountPath: /app/photos, readOnly: true }
+            - { name: photos, mountPath: /app/photos }             # the copy, writable
             - { name: previews, mountPath: /app/public/previews }
             - { name: medium, mountPath: /app/public/medium }
           readinessProbe:
@@ -173,8 +189,11 @@ spec:
             requests: { cpu: 50m, memory: 128Mi }
             limits: { memory: 768Mi }   # preview generation (sharp) is the peak
       volumes:
-        - name: photos
+        - name: prod-photos
           persistentVolumeClaim: { claimName: photo-book-photos, readOnly: true }
+        # node disk, deleted with the pod; room for the 10Gi production volume + uploads
+        - name: photos
+          emptyDir: { sizeLimit: 12Gi }
         - { name: previews, persistentVolumeClaim: { claimName: photo-book-qa-previews } }
         - { name: medium, persistentVolumeClaim: { claimName: photo-book-qa-medium } }
 ---

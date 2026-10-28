@@ -291,8 +291,11 @@ push main ─► mine-sim CI: test + Grype gate ─► jarod68/mine-sim:sha-<com
   `qa.book.holtz.fr`, `:latest` → `deploy/photo-book`, one replica each). Its QA
   is isolated from production data: its own PostgreSQL role + database
   `photobook_qa` (created by `deploy.sh`; CONNECT on each database is revoked from
-  PUBLIC, so the QA role can't open the production one), the production photos
-  mounted **read-only**, its own preview caches and Web Push keys. The route is
+  PUBLIC, so the QA role can't open the production one), a **writable copy**
+  of the production photos made at every pod start (init container `copy-photos`;
+  the production volume is only mounted read-only, as the copy's source), so QA
+  can create albums, upload and delete, and every deployment or restart starts
+  again from the production photos; its own preview caches and Web Push keys. The route is
   behind `admin-auth`: in a fresh QA database every album defaults to *public*,
   so albums that are private in prod would otherwise be readable there. The QA
   admin password is printed once in `kubectl -n web logs deploy/photo-book-qa`.

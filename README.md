@@ -243,6 +243,7 @@ issued. Dual-stack makes Traefik answer the challenge on both families.
 | PVC                    | Holds                                     |
 |------------------------|-------------------------------------------|
 | `postgres-data`        | PostgreSQL database                       |
+| `postgres-backups`     | Nightly dumps of the photo-book database (last 14) |
 | `photo-book-photos`    | Original photos                           |
 | `photo-book-previews`  | Preview thumbnails (cache)                |
 | `photo-book-medium`    | Medium images (cache)                     |
@@ -262,6 +263,25 @@ kubectl -n <ns> get pvc <name> -o jsonpath='{.spec.volumeName}' \
 
 > `k3s-uninstall.sh` **deletes all of this**. Back up first (`pg_dump`, `tar` the
 > photo PVCs) before reinstalling.
+
+### Backups
+
+The **photo-book database** (titles, places, likes, accounts, album settings,
+share links) is dumped every night at 03:30 by the `postgres-backup` CronJob
+(`30-postgres.yaml`) into the `postgres-backups` volume — `pg_dump` custom
+format, the 14 most recent kept.
+
+```bash
+make db-backup                       # take one now (and print its log)
+make db-backups                      # list them
+make db-restore F=photobook-2026-11-02_0330.dump   # restore one (asks first)
+```
+
+These dumps live on the same disk as the database: they cover a bad
+migration, a wrong deletion or a corrupt database, **not the loss of the VPS
+disk**. Neither do the original photos (`photo-book-photos`). For that, copy
+both off the server — e.g. the provider's VPS snapshots, or an `rclone` CronJob
+to an object storage (needs its credentials in a Secret).
 
 ---
 

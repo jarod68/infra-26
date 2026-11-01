@@ -81,8 +81,12 @@ spec:
             tcpSocket: { port: 3000 }
             initialDelaySeconds: 5
             periodSeconds: 10
+          # A ceiling, so a burst (sharp turning a 12K panorama or a HEIC into
+          # previews) cannot starve the rest of the VPS: over it the pod
+          # restarts instead. Usual use is ~200-300 Mi.
           resources:
-            requests: { cpu: 50m, memory: 128Mi }
+            requests: { cpu: 50m, memory: 192Mi }
+            limits: { memory: 1Gi }
       volumes:
         - { name: photos, persistentVolumeClaim: { claimName: photo-book-photos } }
         - { name: previews, persistentVolumeClaim: { claimName: photo-book-previews } }

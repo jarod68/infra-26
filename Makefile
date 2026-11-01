@@ -4,7 +4,7 @@ KUBECTL := $(shell command -v kubectl >/dev/null 2>&1 && echo kubectl || echo k3
 
 .PHONY: help bootstrap deploy update restart status status-mon password \
         logs-photo logs-mine logs-getaround logs-sitegen logs-traefik logs-db logs-grafana logs-loki \
-        logs-dtrack logs-dtrack-db
+        logs-dtrack logs-dtrack-db db-backup db-backups db-restore
 
 help:
 	@echo "Targets:"
@@ -15,6 +15,9 @@ help:
 	@echo "  status        Show pods, services, ingressroutes and volumes (web)."
 	@echo "  status-mon    Show the monitoring stack (pods, svc, pvc)."
 	@echo "  password      Print the generated Postgres / admin / Grafana passwords."
+	@echo "  db-backup     Dump the photo-book database now (the nightly CronJob, on demand)."
+	@echo "  db-backups    List the dumps kept (last 14)."
+	@echo "  db-restore F=<file.dump>  Restore the photo-book database from one of them."
 	@echo "  logs-photo|logs-mine|logs-getaround|logs-sitegen|logs-db|logs-dtrack|logs-dtrack-db|logs-traefik|logs-grafana|logs-loki  Tail logs."
 
 bootstrap:
@@ -70,3 +73,25 @@ logs-grafana:
 	$(KUBECTL) -n monitoring logs -f deploy/grafana
 logs-loki:
 	$(KUBECTL) -n monitoring logs -f statefulset/loki
+
+# ── photo-book database backups (CronJob postgres-backup, 30-postgres.yaml) ──
+db-backup:
+	@job=postgres-backup-manual-$$(date +%s); \
+	$(KUBECTL) -n web create job --from=cronjob/postgres-backup $$job && \
+	$(KUBECTL) -n web wait --for=condition=complete job/$$job --timeout=300s && \
+	$(KUBECTL) -n web logs job/$$job
+
+# a throw-away pod mounting the backups volume
+BACKUP_POD = $(KUBECTL) -n web run backup-shell-$$(date +%s) --rm -i --restart=Never --image=postgres:16-alpine \
+	--overrides='{"spec":{"securityContext":{"runAsUser":70,"fsGroup":70},"containers":[{"name":"b","image":"postgres:16-alpine","stdin":true,"command":["sh","-c","'"$$CMD"'"],"env":[{"name":"PGHOST","value":"postgres"},{"name":"PGUSER","value":"photobook"},{"name":"PGPASSWORD","valueFrom":{"secretKeyRef":{"name":"app-secrets","key":"POSTGRES_PASSWORD"}}}],"volumeMounts":[{"name":"b","mountPath":"/backups"}]}],"volumes":[{"name":"b","persistentVolumeClaim":{"claimName":"postgres-backups"}}]}}'
+
+db-backups:
+	@CMD='ls -lh /backups'; $(BACKUP_POD)
+
+db-restore:
+	@test -n "$(F)" || { echo "usage: make db-restore F=photobook-YYYY-MM-DD_HHMM.dump"; exit 1; }
+	@read -p "Replace the photo-book database with $(F)? photo-book is stopped meanwhile. [y/N] " a && [ "$$a" = y ]
+	$(KUBECTL) -n web scale deploy/photo-book --replicas=0
+	@CMD='pg_restore --clean --if-exists --no-owner -d photobook /backups/$(F)'; $(BACKUP_POD)
+	$(KUBECTL) -n web scale deploy/photo-book --replicas=1
+

@@ -62,3 +62,73 @@ spec:
   ports:
     - port: 5432
       targetPort: 5432
+---
+# ── Backups ───────────────────────────────────────────────────────────────────
+# Every night, a pg_dump (custom format: compressed, restorable table by table)
+# of the photo-book database into its own volume; the last 14 are kept.
+# They protect from a bad migration, a wrong deletion or a corrupt database;
+# not from the loss of the VPS disk — copy them off the server for that
+# (README → Backups). `make db-backup` takes one now, `make db-backups` lists them.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-backups
+  namespace: web
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: web
+spec:
+  schedule: "30 3 * * *"          # 03:30 every night (server time)
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels: { app: postgres-backup }
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 70               # the postgres user of the alpine image
+            runAsGroup: 70
+            fsGroup: 70
+          containers:
+            - name: backup
+              image: postgres:16-alpine
+              env:
+                - { name: PGHOST, value: postgres }
+                - { name: PGUSER, value: photobook }
+                - { name: PGDATABASE, value: photobook }
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: app-secrets, key: POSTGRES_PASSWORD }
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  f="/backups/photobook-$(date +%Y-%m-%d_%H%M).dump"
+                  pg_dump --format=custom --no-owner --file="$f.part"
+                  mv "$f.part" "$f"
+                  echo "backup: $f ($(du -h "$f" | cut -f1))"
+                  # keep the 14 most recent
+                  ls -1t /backups/photobook-*.dump | tail -n +15 | xargs -r rm -f
+                  ls -lh /backups
+              volumeMounts:
+                - { name: backups, mountPath: /backups }
+              resources:
+                requests: { cpu: 20m, memory: 64Mi }
+                limits: { memory: 256Mi }
+          volumes:
+            - name: backups
+              persistentVolumeClaim: { claimName: postgres-backups }

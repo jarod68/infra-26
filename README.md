@@ -243,7 +243,7 @@ issued. Dual-stack makes Traefik answer the challenge on both families.
 | PVC                    | Holds                                     |
 |------------------------|-------------------------------------------|
 | `postgres-data`        | PostgreSQL database                       |
-| `postgres-backups`     | Nightly dumps of the photo-book database (last 14) |
+| `postgres-backups`     | Nightly dumps of the photo-book database (last 14; copied to the NAS) |
 | `photo-book-photos`    | Original photos                           |
 | `photo-book-previews`  | Preview thumbnails (cache)                |
 | `photo-book-medium`    | Medium images (cache)                     |
@@ -278,10 +278,28 @@ make db-restore F=photobook-2026-11-02_0330.dump   # restore one (asks first)
 ```
 
 These dumps live on the same disk as the database: they cover a bad
-migration, a wrong deletion or a corrupt database, **not the loss of the VPS
-disk**. Neither do the original photos (`photo-book-photos`). For that, copy
-both off the server — e.g. the provider's VPS snapshots, or an `rclone` CronJob
-to an object storage (needs its credentials in a Secret).
+migration, a wrong deletion or a corrupt database, not the loss of the VPS
+disk. For that, the **`nas-sync` CronJob** (`32-nas-sync.yaml`) copies the
+original photos (`photo-book-photos`) and the dumps off the server to the home
+NAS, 4 times a day (04:00, 10:00, 16:00, 22:00), with rsync over SSH — **in
+IPv6**: the NAS is not reachable in IPv4 from the VPS. It only adds and
+updates: nothing is ever deleted on the NAS, so the dumps older than the 14
+kept here stay there. Previews and medium sizes are not copied (photo-book
+regenerates them).
+
+```bash
+make nas-secret      # once: NAS host, port, user, rsync module/path, password (hidden)
+make nas-sync        # copy now and follow the log (the first copy takes a while)
+```
+
+The login lives only in the Secret `nas-rsync`, never in this repo or `.env`;
+`make nas-secret` also pins the NAS's SSH host keys (prints their
+fingerprints), so a run refuses any other machine. Re-run it after changing
+the password or the NAS's keys.
+
+To restore from the NAS: copy `<module/path>/photos/` back into the
+`photo-book-photos` volume, and a dump from `<module/path>/db/` into
+`postgres-backups`, then `make db-restore F=…`.
 
 ---
 
@@ -348,6 +366,7 @@ infra-26/
     ├── 15-middlewares.yaml       # HSTS middleware
     ├── 20-keel.yaml              # Keel: rolls annotated Deployments when their tag moves
     ├── 30-postgres.yaml          # Deployment + PVC + Service
+    ├── 32-nas-sync.yaml          # CronJob: photos + dumps → home NAS (rsync/SSH, IPv6)
     ├── 40-photo-book.yaml        # prod (x1, :latest) + QA (x1, :qa, own DB, prod photos read-only), Keel-annotated
     ├── 50-mine-sim.yaml          # prod (static, x2, :latest) + QA (x1, :qa), Keel-annotated
     ├── 55-getaround.yaml         # Deployment + PVC + Service (private image)

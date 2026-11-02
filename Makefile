@@ -4,7 +4,7 @@ KUBECTL := $(shell command -v kubectl >/dev/null 2>&1 && echo kubectl || echo k3
 
 .PHONY: help bootstrap deploy update restart status status-mon password \
         logs-photo logs-mine logs-getaround logs-sitegen logs-traefik logs-db logs-grafana logs-loki \
-        logs-dtrack logs-dtrack-db db-backup db-backups db-restore
+        logs-dtrack logs-dtrack-db db-backup db-backups db-restore nas-secret nas-sync
 
 help:
 	@echo "Targets:"
@@ -18,6 +18,8 @@ help:
 	@echo "  db-backup     Dump the photo-book database now (the nightly CronJob, on demand)."
 	@echo "  db-backups    List the dumps kept (last 14)."
 	@echo "  db-restore F=<file.dump>  Restore the photo-book database from one of them."
+	@echo "  nas-secret    Store the home NAS rsync login (prompts; password typed hidden)."
+	@echo "  nas-sync      Copy photos + dumps to the NAS now (the 4×/day CronJob, on demand)."
 	@echo "  logs-photo|logs-mine|logs-getaround|logs-sitegen|logs-db|logs-dtrack|logs-dtrack-db|logs-traefik|logs-grafana|logs-loki  Tail logs."
 
 bootstrap:
@@ -95,3 +97,26 @@ db-restore:
 	@CMD='pg_restore --clean --if-exists --no-owner -d photobook /backups/$(F)'; $(BACKUP_POD)
 	$(KUBECTL) -n web scale deploy/photo-book --replicas=1
 
+
+# ── Off-site copy to the home NAS (CronJob nas-sync, 32-nas-sync.yaml) ───────
+# The login lives only in the Secret nas-rsync: typed here, never in the repo
+# or .env. The NAS's SSH host keys are scanned now (IPv6) and pinned.
+nas-secret:
+	@set -e; d=$$(mktemp -d); trap 'rm -rf "$$d"' EXIT; \
+	printf 'NAS host: '; read -r h; printf 'SSH port: '; read -r p; printf 'User: '; read -r u; \
+	printf 'rsync module/path [RSYNC/vps1]: '; read -r m; m=$${m:-RSYNC/vps1}; \
+	printf 'Password: '; stty -echo 2>/dev/null || true; IFS= read -r pw; stty echo 2>/dev/null || true; echo; \
+	printf '%s' "$$pw" > "$$d/pw"; \
+	ssh-keyscan -6 -p "$$p" "$$h" 2>/dev/null > "$$d/known_hosts"; \
+	test -s "$$d/known_hosts" || { echo "no SSH answer from [$$h]:$$p over IPv6"; exit 1; }; \
+	echo "NAS host keys (compare with DSM or the infra notes):"; ssh-keygen -lf "$$d/known_hosts"; \
+	$(KUBECTL) -n web create secret generic nas-rsync \
+	  --from-literal=NAS_HOST="$$h" --from-literal=NAS_PORT="$$p" --from-literal=NAS_USER="$$u" \
+	  --from-literal=NAS_DEST="$$m" --from-file=NAS_PASSWORD="$$d/pw" --from-file=known_hosts="$$d/known_hosts" \
+	  --dry-run=client -o yaml | $(KUBECTL) apply -f -
+
+nas-sync:
+	@job=nas-sync-manual-$$(date +%s); \
+	$(KUBECTL) -n web create job --from=cronjob/nas-sync $$job && \
+	$(KUBECTL) -n web wait --for=condition=ready pod -l job-name=$$job --timeout=120s && \
+	$(KUBECTL) -n web logs -f job/$$job

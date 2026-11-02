@@ -215,6 +215,7 @@ RENDER="$(mktemp -d)"; trap 'rm -rf "$RENDER"' EXIT
 for f in manifests/15-middlewares.yaml \
          manifests/20-keel.yaml \
          manifests/30-postgres.yaml \
+         manifests/32-nas-sync.yaml \
          manifests/40-photo-book.yaml \
          manifests/50-mine-sim.yaml \
          manifests/55-getaround.yaml \
@@ -231,6 +232,8 @@ for f in manifests/15-middlewares.yaml \
 done
 info "Applying application + monitoring manifests …"
 $KUBECTL apply -f "$RENDER"
+$KUBECTL -n web get secret nas-rsync >/dev/null 2>&1 \
+  || warn "No NAS login yet: the nas-sync CronJob fails until you run \`make nas-secret\`."
 
 # ── photo-book QA database ────────────────────────────────────────────────────
 # Its own role + database in the shared PostgreSQL (idempotent). The QA role

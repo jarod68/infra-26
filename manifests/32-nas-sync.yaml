@@ -1,0 +1,75 @@
+# ── Off-site copy: photo-book photos + database dumps → the home NAS ─────────
+# Four times a day, rsync over SSH (IPv6: the NAS is not reachable in IPv4 from
+# here) into the NAS's rsync module, under <dest>/photos and <dest>/db.
+# Nothing is ever deleted on the NAS: a photo removed here stays there, and the
+# dumps pile up beyond the 14 kept on the VPS (a few MB each).
+#
+# Where and as whom come from the Secret `nas-rsync` — created on the VPS by
+# `make nas-secret` (prompts, password typed hidden), never stored in this repo:
+#   NAS_HOST, NAS_PORT, NAS_USER, NAS_PASSWORD, NAS_DEST (module/path, e.g. RSYNC/vps1)
+#   known_hosts  — the NAS's SSH host keys, scanned once (checked on every run)
+# Run one now: `make nas-sync`.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nas-sync
+  namespace: web
+spec:
+  schedule: "0 4,10,16,22 * * *"  # 4×/day (server time); 04:00 picks up the 03:30 dump
+  concurrencyPolicy: Forbid       # the first copy can outlast the interval
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 21600  # 6 h: room for the first full copy
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels: { app: nas-sync }
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: sync
+              image: alpine:3.22
+              envFrom:
+                - secretRef: { name: nas-rsync }
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  apk add --no-cache -q rsync openssh-client
+                  # ssh asks this script for the password: it stays in the
+                  # environment, never on a disk or a command line
+                  printf '#!/bin/sh\nprintf "%%s\\n" "$NAS_PASSWORD"\n' > /tmp/askpass
+                  chmod 700 /tmp/askpass
+                  export SSH_ASKPASS=/tmp/askpass SSH_ASKPASS_REQUIRE=force DISPLAY=none
+                  ssh="ssh -6 -p $NAS_PORT -o UserKnownHostsFile=/nas/known_hosts -o StrictHostKeyChecking=yes \
+                    -o PreferredAuthentications=password,keyboard-interactive -o NumberOfPasswordPrompts=1 \
+                    -o ServerAliveInterval=30"
+                  dest="$NAS_USER@$NAS_HOST::$NAS_DEST"
+                  # -rtp, not -a: the NAS account can't set owners; modes forced
+                  # readable for the other NAS accounts (File Station, Photos)
+                  rs() { rsync -e "$ssh" -p --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r "$@"; }
+                  mkdir -p /tmp/skel/photos /tmp/skel/db
+                  rs -r /tmp/skel/ "$dest/"                 # creates <dest>/{photos,db}
+                  echo "── photos"
+                  rs -rt --partial --stats /photos/ "$dest/photos/"
+                  echo "── database dumps"
+                  rs -rt --stats --include='photobook-*.dump' --exclude='*' /backups/ "$dest/db/"
+              volumeMounts:
+                - { name: photos, mountPath: /photos, readOnly: true }
+                - { name: backups, mountPath: /backups, readOnly: true }
+                - { name: nas, mountPath: /nas, readOnly: true }
+              resources:
+                requests: { cpu: 20m, memory: 64Mi }
+                limits: { memory: 256Mi }
+          volumes:
+            - name: photos
+              persistentVolumeClaim: { claimName: photo-book-photos, readOnly: true }
+            - name: backups
+              persistentVolumeClaim: { claimName: postgres-backups, readOnly: true }
+            - name: nas
+              secret:
+                secretName: nas-rsync
+                items: [{ key: known_hosts, path: known_hosts }]

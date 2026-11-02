@@ -118,6 +118,7 @@ spec:
                 - |
                   set -eu
                   f="/backups/photobook-$(date +%Y-%m-%d_%H%M).dump"
+                  trap 'rm -f "$f.part"' EXIT   # a failed dump leaves nothing behind
                   pg_dump --format=custom --no-owner --file="$f.part"
                   mv "$f.part" "$f"
                   echo "backup: $f ($(du -h "$f" | cut -f1))"

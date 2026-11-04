@@ -1,3 +1,31 @@
+# Per visitor (client IP), on every HTTPS site — attached to the websecure
+# entry point (10-traefik-acme.yaml), so no route can forget them:
+#  - web-ratelimit: 40 requests a second on average, bursts of 400 (opening
+#    an album asks for a page of thumbnails at once); beyond, 429;
+#  - web-inflight: 60 requests at once.
+# Generous on purpose: an office or a mobile carrier puts many people behind
+# one address. The apps keep their own finer limits (photo-book: logins,
+# API, geocoding — per client too, now that they see real addresses).
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: ratelimit
+  namespace: web
+spec:
+  rateLimit:
+    average: 40
+    period: 1s
+    burst: 400
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: inflight
+  namespace: web
+spec:
+  inFlightReq:
+    amount: 60
+---
 # HSTS response header, applied to every route (Traefik v3 CRD).
 apiVersion: traefik.io/v1alpha1
 kind: Middleware

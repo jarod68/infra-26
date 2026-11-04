@@ -15,14 +15,18 @@ spec:
     providers:
       kubernetesCRD:
         allowCrossNamespace: true
-    # Expose the LoadBalancer service on both IP families so servicelb binds
-    # :80/:443 on IPv4 *and* IPv6 — required for Let's Encrypt HTTP-01 over the
-    # AAAA record. (Needs the cluster installed dual-stack; see bootstrap.sh.)
+    # The visitors' real addresses. k3s' servicelb (klipper-lb) MASQUERADEs
+    # what it forwards, so Traefik — and the apps behind it, through
+    # X-Forwarded-For — saw one internal address for everybody: every per-IP
+    # limit was shared by the whole Internet (10 attempts anywhere locked the
+    # photo-book login for all). Traefik now takes :80 / :443 on the node
+    # itself (hostPort: a DNAT, no masquerade, IPv4 and IPv6 alike), and its
+    # Service is internal only, so servicelb no longer holds those ports.
+    # Only 80 and 443 are published (not its metrics or API ports, as
+    # hostNetwork would). The switch drops connections for a few seconds.
     service:
-      ipFamilyPolicy: PreferDualStack
-      ipFamilies:
-        - IPv4
-        - IPv6
+      spec:
+        type: ClusterIP
     # Persist the ACME store so certs survive Traefik restarts (local-path PVC).
     # Traefik creates /data/acme.json (0600) itself; fsGroup makes /data writable.
     persistence:
@@ -37,11 +41,26 @@ spec:
           storage: /data/acme.json
           httpChallenge:
             entryPoint: web
-    # Redirect every :80 request to :443 (ACME challenges are still served first).
+    # Redirect every :80 request to :443 (ACME challenges are still served
+    # first). The chart's syntax since v34 — the former `redirectTo` was
+    # silently ignored: http:// answered 404.
+    # Per-client limits on every HTTPS site (15-middlewares.yaml): requests
+    # per second and requests at once.
     ports:
       web:
-        redirectTo:
-          port: websecure
+        hostPort: 80
+        http:
+          redirections:
+            entryPoint:
+              to: websecure
+              scheme: https
+              permanent: true
+      websecure:
+        hostPort: 443
+        http:
+          middlewares:
+            - web-ratelimit@kubernetescrd
+            - web-inflight@kubernetescrd
     # Access logs in JSON on stdout → captured by Promtail into Loki. This is our
     # request-tracing layer: every request in/out through the proxy is recorded
     # (method, host, path, status, duration, backend). Query in Grafana with:

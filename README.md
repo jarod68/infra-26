@@ -236,6 +236,34 @@ issued. Dual-stack makes Traefik answer the challenge on both families.
 > The CIDRs are set **at install time** and cannot be changed on a running
 > cluster — switching requires `k3s-uninstall.sh` then `./bootstrap.sh`.
 
+### Visitors' addresses and per-client limits
+
+Traefik listens on the node's **:80 and :443 itself** (`hostPort`, in
+`10-traefik-acme.yaml`); its Service is `ClusterIP`. k3s' servicelb
+(klipper-lb) used to sit in front and **MASQUERADEs** what it forwards, so
+Traefik and the apps saw one internal address for every visitor: any per-IP
+limit was shared by the whole Internet — ten login attempts from anywhere
+locked photo-book's login for everybody, 600 API calls a quarter of an hour
+for the whole site. A `hostPort` is a plain DNAT (both families): the real
+address reaches Traefik, which passes it on in `X-Forwarded-For` (it ignores
+the one a client sends; photo-book trusts one proxy hop).
+
+Every HTTPS site then goes through two middlewares attached to the
+`websecure` entry point (`15-middlewares.yaml`), per client address:
+`web-ratelimit` (40 requests a second on average, bursts of 400 → 429) and
+`web-inflight` (60 at once). Generous on purpose — an office or a mobile
+carrier puts many people behind one address; the apps keep their finer
+limits (photo-book: logins 10 / 15 min, API 600 / 15 min, geocoding 30 / min).
+
+To check from outside that addresses are seen: ask the login 14 times from
+14 places (`https://check-host.net/check-http?host=https://book.holtz.fr/api/auth/login&max_nodes=14`):
+all `404` = one counter per visitor; some `429` = a shared counter.
+
+> The chart's values are checked against its schema: an unknown key makes
+> the whole HelmChartConfig fail (the former `ports.web.redirectTo` did since
+> chart v34: http:// answered 404). Render before deploying:
+> `helm template traefik <chart>.tgz -f <valuesContent>`.
+
 ---
 
 ## 7. Persistence (k3s local-path, under `/var/lib/rancher/k3s/storage`)

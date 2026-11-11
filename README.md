@@ -331,6 +331,28 @@ To restore from the NAS: copy `<module/path>/photos/` back into the
 
 ---
 
+### photo-book: "Sign in with Google"
+
+Off until configured. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials):
+create an **OAuth client ID**, type *Web application*, with these **authorized redirect URIs**:
+
+```
+https://book.holtz.fr/api/auth/google/callback
+https://qa.book.holtz.fr/api/auth/google/callback
+```
+
+(the consent screen: *External*, scopes `openid` and `email`). Then on the VPS:
+
+```bash
+make google-sso      # client id, then the secret typed hidden → Secret photo-book-google; restarts photo-book
+```
+
+No sign-up: a Google account opens the photo-book account whose e-mail the admin set
+(Admin → Users, the @ button), and stays linked to it. The admin's own account also needs
+its two-factor code after Google.
+
+---
+
 ## 8. Release flow (QA → prod): mine-sim and photo-book
 
 ```

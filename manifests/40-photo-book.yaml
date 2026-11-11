@@ -71,6 +71,14 @@ spec:
             - name: VAPID_SUBJECT
               valueFrom:
                 secretKeyRef: { name: app-secrets, key: VAPID_SUBJECT, optional: true }
+            # "Sign in with Google" — optional; from the Secret photo-book-google
+            # (make google-sso), never in this repo
+            - name: GOOGLE_CLIENT_ID
+              valueFrom:
+                secretKeyRef: { name: photo-book-google, key: GOOGLE_CLIENT_ID, optional: true }
+            - name: GOOGLE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: { name: photo-book-google, key: GOOGLE_CLIENT_SECRET, optional: true }
           ports:
             - containerPort: 3000
           volumeMounts:
@@ -179,6 +187,14 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef: { name: app-secrets, key: POSTGRES_QA_PASSWORD }
+            # "Sign in with Google" — optional; from the Secret photo-book-google
+            # (make google-sso), never in this repo
+            - name: GOOGLE_CLIENT_ID
+              valueFrom:
+                secretKeyRef: { name: photo-book-google, key: GOOGLE_CLIENT_ID, optional: true }
+            - name: GOOGLE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: { name: photo-book-google, key: GOOGLE_CLIENT_SECRET, optional: true }
           ports:
             - containerPort: 3000
           volumeMounts:

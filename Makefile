@@ -4,7 +4,7 @@ KUBECTL := $(shell command -v kubectl >/dev/null 2>&1 && echo kubectl || echo k3
 
 .PHONY: help bootstrap deploy update restart status status-mon password \
         logs-photo logs-mine logs-getaround logs-sitegen logs-traefik logs-db logs-grafana logs-loki \
-        logs-dtrack logs-dtrack-db db-backup db-backups db-restore nas-secret nas-sync
+        logs-dtrack logs-dtrack-db db-backup db-backups db-restore nas-secret nas-sync google-sso
 
 help:
 	@echo "Targets:"
@@ -20,6 +20,7 @@ help:
 	@echo "  db-restore F=<file.dump>  Restore the photo-book database from one of them."
 	@echo "  nas-secret    Store the home NAS rsync login (prompts; password typed hidden)."
 	@echo "  nas-sync      Copy photos + dumps to the NAS now (the 4×/day CronJob, on demand)."
+	@echo "  google-sso    Store photo-book's Google sign-in client (prompts; secret typed hidden)."
 	@echo "  logs-photo|logs-mine|logs-getaround|logs-sitegen|logs-db|logs-dtrack|logs-dtrack-db|logs-traefik|logs-grafana|logs-loki  Tail logs."
 
 bootstrap:
@@ -120,3 +121,17 @@ nas-sync:
 	$(KUBECTL) -n web create job --from=cronjob/nas-sync $$job && \
 	$(KUBECTL) -n web wait --for=condition=ready pod -l job-name=$$job --timeout=120s && \
 	$(KUBECTL) -n web logs -f job/$$job
+
+# ── photo-book: "Sign in with Google" (an OAuth client of Google Cloud) ──────
+# The client id and secret live only in the Secret photo-book-google (prod and
+# QA read it), typed here — never in the repo or .env. Re-run to change them;
+# photo-book picks them up when its pods restart.
+google-sso:
+	@set -e; d=$$(mktemp -d); trap 'rm -rf "$$d"' EXIT; \
+	printf 'Google OAuth client id: '; read -r id; \
+	printf 'Client secret: '; stty -echo 2>/dev/null || true; IFS= read -r sec; stty echo 2>/dev/null || true; echo; \
+	printf '%s' "$$sec" > "$$d/sec"; \
+	$(KUBECTL) -n web create secret generic photo-book-google \
+	  --from-literal=GOOGLE_CLIENT_ID="$$id" --from-file=GOOGLE_CLIENT_SECRET="$$d/sec" \
+	  --dry-run=client -o yaml | $(KUBECTL) apply -f -; \
+	$(KUBECTL) -n web rollout restart deploy/photo-book deploy/photo-book-qa
